@@ -741,6 +741,11 @@ impl SimplePostgresClient {
         let parent = parent.map(|parent| parent as i64);
         let updated_on = Utc::now().naive_utc();
         let status_str = status.as_str();
+        let status_str = if status_str.len() < 16 {
+            status_str
+        } else {
+            &status_str[..16]
+        };
 
         let result = match parent {
             Some(parent) => client.execute(statement, &[&slot, &parent, &status_str, &updated_on]),
