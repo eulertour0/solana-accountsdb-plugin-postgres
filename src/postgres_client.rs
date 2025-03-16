@@ -1213,14 +1213,14 @@ impl ParallelPostgresClient {
         &self,
         slot: u64,
         parent: Option<u64>,
-        status: SlotStatus,
+        status: &SlotStatus,
     ) -> Result<(), GeyserPluginError> {
         if let Err(err) = self
             .sender
             .send(DbWorkItem::UpdateSlot(Box::new(UpdateSlotRequest {
                 slot,
                 parent,
-                slot_status: status,
+                slot_status: status.clone(),
             })))
         {
             return Err(GeyserPluginError::SlotStatusUpdateError {
