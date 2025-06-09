@@ -414,6 +414,7 @@ impl From<&TransactionError> for DbTransactionErrorCode {
                 Self::ProgramExecutionTemporarilyRestricted
             }
             TransactionError::ProgramCacheHitMaxLimit => todo!(),
+            TransactionError::CommitCancelled => todo!(),
         }
     }
 }
