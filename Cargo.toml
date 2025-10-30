@@ -25,13 +25,14 @@ postgres-openssl = { version = "0.5.0"}
 serde = "1.0.145"
 serde_derive = "1.0.145"
 serde_json = "1.0.85"
-agave-geyser-plugin-interface = { version = "=2.3.6" }
-solana-logger = { version = "2.3.0" }
-solana-measure = { version = "2.3.0" }
-solana-metrics = { version = "2.3.0" }
-solana-runtime = { version = "2.3.0" }
-solana-sdk = { version = "2.3.0" }
-solana-transaction-status = { version = "2.3.0" }
+agave-geyser-plugin-interface = { version = "3.0.8" }
+solana-logger = { version = "3.0.0" }
+solana-measure = { version = "3.0.0" }
+solana-metrics = { version = "3.0.0" }
+solana-runtime = { version = "3.0.0" }
+solana-sdk = { version = "3.0.0" }
+solana-transaction-status = { version = "3.0.0" }
+solana-message = { version = "3.0.1" }
 thiserror = "1.0.37"
 tokio-postgres = "0.7.7"
 

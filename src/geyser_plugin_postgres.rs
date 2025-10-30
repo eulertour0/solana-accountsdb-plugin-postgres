@@ -5,16 +5,18 @@ use {
         postgres_client::{ParallelPostgresClient, PostgresClientBuilder},
         transaction_selector::TransactionSelector,
     },
-    bs58,
-    log::*,
-    serde_derive::{Deserialize, Serialize},
-    serde_json,
     agave_geyser_plugin_interface::geyser_plugin_interface::{
         GeyserPlugin, GeyserPluginError, ReplicaAccountInfoVersions, ReplicaBlockInfoVersions,
         ReplicaTransactionInfoVersions, Result, SlotStatus,
     },
+    bs58,
+    log::*,
+    serde_derive::{Deserialize, Serialize},
+    serde_json,
     solana_measure::measure::Measure,
+    solana_message::AccountKeys,
     solana_metrics::*,
+    solana_sdk::pubkey::Pubkey,
     std::{fs::File, io::Read},
     thiserror::Error,
 };
@@ -311,7 +313,12 @@ impl GeyserPlugin for GeyserPluginPostgres {
         Ok(())
     }
 
-    fn update_slot_status(&self, slot: u64, parent: Option<u64>, status: &SlotStatus) -> Result<()> {
+    fn update_slot_status(
+        &self,
+        slot: u64,
+        parent: Option<u64>,
+        status: &SlotStatus,
+    ) -> Result<()> {
         info!("Updating slot {:?} at with status {:?}", slot, status);
 
         match &self.client {
@@ -373,11 +380,18 @@ impl GeyserPlugin for GeyserPluginPostgres {
                 )));
             }
             Some(client) => match transaction_info {
-                ReplicaTransactionInfoVersions::V0_0_2(transaction_info) => {
+                ReplicaTransactionInfoVersions::V0_0_3(transaction_info) => {
                     if let Some(transaction_selector) = &self.transaction_selector {
+                        let mentions_addresses: Vec<Pubkey> = AccountKeys::new(
+                            transaction_info.transaction.message.static_account_keys(),
+                            Some(&transaction_info.transaction_status_meta.loaded_addresses),
+                        )
+                        .iter()
+                        .map(|address| Pubkey::new_from_array(address.to_bytes()))
+                        .collect();
                         if !transaction_selector.is_transaction_selected(
                             transaction_info.is_vote,
-                            Box::new(transaction_info.transaction.message().account_keys().iter()),
+                            Box::new(mentions_addresses.iter()),
                         ) {
                             return Ok(());
                         }
