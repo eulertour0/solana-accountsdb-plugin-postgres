@@ -2,6 +2,107 @@ The `solana-geyser-plugin-postgres` crate implements a plugin storing
 account data to a PostgreSQL database to illustrate how a plugin can be
 developed to work with Solana validators using the [Plugin Framework](https://docs.solana.com/developing/plugins/geyser-plugins).
 
+### Building for agave v4.3.0
+
+A Geyser plugin is loaded with `dlopen` and shares Rust trait objects and
+`repr(Rust)` types (`VersionedTransaction`, `TransactionStatusMeta`,
+`log::Record`, ...) with the validator. It is only safe to load when it is built
+with the same rustc and from the same agave source as the validator. A plugin
+built for agave 4.2 crashes a 4.3 validator at startup.
+
+This branch (`agave-v4.3`) targets **agave v4.3.0** (tag `v4.3.0`, commit
+`825efd18`):
+
+* `agave-geyser-plugin-interface` and `solana-transaction-status` are path
+  dependencies on the agave source, expected as a sibling directory named
+  `agave-v4.3.0` next to this repository (`../agave-v4.3.0`). If the validator
+  source lives elsewhere, create a symlink at that path pointing to it (or edit
+  the two `path =` entries in `Cargo.toml`).
+* `rust-toolchain.toml` pins rustc **1.97.1** (agave v4.3.0's toolchain).
+* `Cargo.lock` was seeded from agave v4.3.0's `Cargo.lock`, and the registry
+  crates whose types cross the plugin boundary are pinned with `=` to the same
+  versions. `scripts/check_agave_abi_deps.sh` verifies that every crate shared
+  with `agave-validator` resolves to the validator's version.
+
+Build steps on mainnet-la (validator built from the same v4.3.0 tree):
+
+```
+rustup toolchain install 1.97.1            # if not installed yet
+cd ~                                       # parent of this repository
+git clone --branch v4.3.0 --depth 1 https://github.com/anza-xyz/agave.git agave-v4.3.0
+#   or: ln -s /path/to/the/validator/agave/source agave-v4.3.0
+cd solana-accountsdb-plugin-postgres
+git checkout agave-v4.3
+scripts/check_agave_abi_deps.sh            # must print "OK: ..."
+cargo build --release --locked
+cargo run --release --locked --example validator_abi_smoke -- \
+    target/release/libsolana_geyser_plugin_postgres.so
+```
+
+The ABI smoke tool `dlopen`s the built library, installs a logger through
+`setup_logger`, and drives every callback agave v4.3.0 uses
+(`update_account_from_snapshot`, `update_account_for_bank`,
+`notify_transaction_for_bank` with `ReplicaTransactionInfoV3`,
+`update_slot_status`, `update_bank_status`, `notify_block_metadata_for_bank`
+with `ReplicaBlockInfoV4`, `notify_end_of_startup`, `on_unload`) and checks the
+values the plugin decoded. It needs no PostgreSQL server.
+
+### Upgrading an existing database (agave v4.3 build)
+
+Run the migration once, **before** loading the new plugin (stop the validator
+or unload the old plugin first so that the brief `ALTER TABLE slot` lock is not
+contended):
+
+```
+psql -h 127.0.0.1 -U solana -d solana -v ON_ERROR_STOP=1 -f scripts/migrate_agave_v4_3.sql
+```
+
+It is additive, idempotent and does not rewrite any table: it adds the
+`TransactionErrorCode` labels `ProgramCacheHitMaxLimit`, `CommitCancelled`,
+`Unknown`, the `RewardType` labels `DeactivatedStake`, `VATDebit`, and widens
+`slot.status` from `VARCHAR(16)` to `VARCHAR(32)`. New databases created with
+`scripts/create_schema.sql` already contain these changes.
+
+`on_load` checks for these labels and the column width and refuses to load
+(the validator does not start) with a message pointing at the migration if they
+are missing. The check is skipped when the database is unreachable at load time.
+
+Behavior of this build:
+
+* Slot statuses are written in full (`first_shred_received`, `created_bank`,
+  ...). A row whose status is `rooted` is never overwritten by a later, lower
+  status from another worker thread.
+* `transaction.message_type` is 0 (legacy, `legacy_message`), 1 (v0,
+  `v0_loaded_message`) or 2 (v1 messages, stored in `legacy_message`; v1 has no
+  address lookup tables). `(v0_loaded_message).loaded_addresses` now holds the
+  ALT-resolved addresses from the transaction status meta.
+* `panic_on_db_errors: true` still aborts the validator on connection or other
+  database failures, but a row the database rejects (SQLSTATE class 22/23, e.g.
+  an enum label missing because the migration was not run) is logged and
+  skipped. Set `"panic_on_row_errors": true` to abort on those too.
+* Invalid keys in `accounts_selector` / `transaction_selector` make `on_load`
+  fail with an error instead of panicking; duplicate mentions are ignored.
+* Plugin logs go to the validator's log through `setup_logger`.
+
+Example configuration (transactions only, accounts disabled):
+
+```
+{
+    "libpath": "/home/solana/solana-accountsdb-plugin-postgres/target/release/libsolana_geyser_plugin_postgres.so",
+    "host": "127.0.0.1",
+    "user": "solana",
+    "port": 5432,
+    "threads": 20,
+    "batch_size": 20,
+    "panic_on_db_errors": true,
+    "panic_on_row_errors": false,
+    "accounts_selector": {},
+    "transaction_selector": {
+        "mentions": ["pubkey-1", "pubkey-2"]
+    }
+}
+```
+
 ### Configuration File Format
 
 The plugin is configured using the input configuration file. An example
