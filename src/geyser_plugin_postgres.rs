@@ -67,6 +67,11 @@ pub struct GeyserPluginPostgresConfig {
     /// connection and other errors still abort.
     pub panic_on_row_errors: Option<bool>,
 
+    /// Controls whether transaction log messages are stored in
+    /// `meta.log_messages`. The default is true; when false the field is
+    /// written as NULL.
+    pub store_log_messages: Option<bool>,
+
     /// Indicates whether to store historical data for accounts
     pub store_account_historical_data: Option<bool>,
 
@@ -164,6 +169,8 @@ impl GeyserPlugin for GeyserPluginPostgres {
     // PostgreSQL database. The default is 'false'.
     // * "panic_on_row_errors", optional, with "panic_on_db_errors" also panic when the database rejects
     // the values of a single row (SQLSTATE class 22/23). The default is 'false' (log and skip the row).
+    // * "store_log_messages", optional, set it to 'false' to write NULL instead of the transaction's
+    // program log messages. The default is 'true'.
     // * "transaction_selector", optional, controls if and what transaction to store. If this field is missing
     // None of the transction is stored.
     // "transaction_selector" : {

@@ -45,6 +45,7 @@ const DEFAULT_THREADS_COUNT: usize = 100;
 const DEFAULT_ACCOUNTS_INSERT_BATCH_SIZE: usize = 10;
 const ACCOUNT_COLUMN_COUNT: usize = 10;
 const DEFAULT_PANIC_ON_DB_ERROR: bool = false;
+const DEFAULT_STORE_LOG_MESSAGES: bool = true;
 const DEFAULT_PANIC_ON_ROW_ERRORS: bool = false;
 const DEFAULT_STORE_ACCOUNT_HISTORICAL_DATA: bool = false;
 
@@ -1099,6 +1100,7 @@ pub struct ParallelPostgresClient {
     sender: Sender<DbWorkItem>,
     last_report: ReportInterval,
     transaction_write_version: AtomicU64,
+    store_log_messages: bool,
 }
 
 impl ParallelPostgresClient {
@@ -1166,6 +1168,9 @@ impl ParallelPostgresClient {
             initialized_worker_count,
             sender,
             transaction_write_version: AtomicU64::default(),
+            store_log_messages: config
+                .store_log_messages
+                .unwrap_or(DEFAULT_STORE_LOG_MESSAGES),
         })
     }
 

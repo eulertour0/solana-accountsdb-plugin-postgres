@@ -687,7 +687,10 @@ impl ParallelPostgresClient {
             .transaction_write_version
             .fetch_add(1, Ordering::Relaxed)
             .wrapping_add(1);
-        let transaction_info = build_db_transaction(slot, transaction_info, write_version);
+        let mut transaction_info = build_db_transaction(slot, transaction_info, write_version);
+        if !self.store_log_messages {
+            transaction_info.meta.log_messages = None;
+        }
         if log::log_enabled!(log::Level::Trace) {
             trace!(
                 "queue transaction signature={} slot={} index={} message_type={} \

@@ -83,6 +83,9 @@ Behavior of this build:
 * Invalid keys in `accounts_selector` / `transaction_selector` make `on_load`
   fail with an error instead of panicking; duplicate mentions are ignored.
 * Plugin logs go to the validator's log through `setup_logger`.
+* `"store_log_messages": false` writes `(meta).log_messages` as NULL instead of
+  the transaction's program logs (default `true`). Logs are about a quarter of
+  the on-disk size of the `transaction` table.
 
 Example configuration (transactions only, accounts disabled):
 
@@ -96,6 +99,7 @@ Example configuration (transactions only, accounts disabled):
     "batch_size": 20,
     "panic_on_db_errors": true,
     "panic_on_row_errors": false,
+    "store_log_messages": false,
     "accounts_selector": {},
     "transaction_selector": {
         "mentions": ["pubkey-1", "pubkey-2"]
