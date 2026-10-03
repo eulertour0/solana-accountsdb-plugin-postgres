@@ -2,15 +2,17 @@ use {
     crate::{
         geyser_plugin_postgres::{GeyserPluginPostgresConfig, GeyserPluginPostgresError},
         postgres_client::{
-            postgres_client_transaction::DbReward, SimplePostgresClient, UpdateBlockMetadataRequest,
+            db_write_error, postgres_client_transaction::DbReward, SimplePostgresClient,
+            UpdateBlockMetadataRequest,
         },
     },
-    chrono::Utc,
-    log::*,
-    postgres::{Client, Statement},
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        GeyserPluginError, ReplicaBlockInfoV4,
+        GeyserPluginError, ReplicaBlockInfo, ReplicaBlockInfoV2, ReplicaBlockInfoV3,
+        ReplicaBlockInfoV4, ReplicaBlockInfoVersions,
     },
+    chrono::Utc,
+    postgres::{Client, Statement},
+    solana_transaction_status::Reward,
 };
 
 #[derive(Clone, Debug)]
@@ -22,16 +24,61 @@ pub struct DbBlockInfo {
     pub block_height: Option<i64>,
 }
 
-impl<'a> From<&ReplicaBlockInfoV4<'a>> for DbBlockInfo {
-    fn from(block_info: &ReplicaBlockInfoV4) -> Self {
+impl DbBlockInfo {
+    fn new(
+        slot: u64,
+        blockhash: &str,
+        rewards: &[Reward],
+        block_time: Option<i64>,
+        block_height: Option<u64>,
+    ) -> Self {
         Self {
-            slot: block_info.slot as i64,
-            blockhash: block_info.blockhash.to_string(),
-            rewards: block_info.rewards.rewards.iter().map(DbReward::from).collect(),
-            block_time: block_info.block_time,
-            block_height: block_info
-                .block_height
-                .map(|block_height| block_height as i64),
+            slot: slot as i64,
+            blockhash: blockhash.to_string(),
+            rewards: rewards.iter().map(DbReward::from).collect(),
+            block_time,
+            block_height: block_height.map(|block_height| block_height as i64),
+        }
+    }
+}
+
+impl From<&ReplicaBlockInfo<'_>> for DbBlockInfo {
+    fn from(b: &ReplicaBlockInfo) -> Self {
+        Self::new(b.slot, b.blockhash, b.rewards, b.block_time, b.block_height)
+    }
+}
+
+impl From<&ReplicaBlockInfoV2<'_>> for DbBlockInfo {
+    fn from(b: &ReplicaBlockInfoV2) -> Self {
+        Self::new(b.slot, b.blockhash, b.rewards, b.block_time, b.block_height)
+    }
+}
+
+impl From<&ReplicaBlockInfoV3<'_>> for DbBlockInfo {
+    fn from(b: &ReplicaBlockInfoV3) -> Self {
+        Self::new(b.slot, b.blockhash, b.rewards, b.block_time, b.block_height)
+    }
+}
+
+impl From<&ReplicaBlockInfoV4<'_>> for DbBlockInfo {
+    fn from(b: &ReplicaBlockInfoV4) -> Self {
+        Self::new(
+            b.slot,
+            b.blockhash,
+            &b.rewards.rewards,
+            b.block_time,
+            b.block_height,
+        )
+    }
+}
+
+impl From<&ReplicaBlockInfoVersions<'_>> for DbBlockInfo {
+    fn from(block_info: &ReplicaBlockInfoVersions) -> Self {
+        match block_info {
+            ReplicaBlockInfoVersions::V0_0_1(b) => Self::from(*b),
+            ReplicaBlockInfoVersions::V0_0_2(b) => Self::from(*b),
+            ReplicaBlockInfoVersions::V0_0_3(b) => Self::from(*b),
+            ReplicaBlockInfoVersions::V0_0_4(b) => Self::from(*b),
         }
     }
 }
@@ -72,7 +119,7 @@ impl SimplePostgresClient {
         let updated_on = Utc::now().naive_utc();
 
         let block_info = block_info.block_info;
-        let result = client.query(
+        let result = client.execute(
             statement,
             &[
                 &block_info.slot,
@@ -85,11 +132,10 @@ impl SimplePostgresClient {
         );
 
         if let Err(err) = result {
-            let msg = format!(
-                "Failed to persist the update of block metadata to the PostgreSQL database. Error: {:?}",
-                err);
-            error!("{}", msg);
-            return Err(GeyserPluginError::AccountsUpdateError { msg });
+            return Err(db_write_error(
+                &format!("block metadata at slot {}", block_info.slot),
+                err,
+            ));
         }
 
         Ok(())

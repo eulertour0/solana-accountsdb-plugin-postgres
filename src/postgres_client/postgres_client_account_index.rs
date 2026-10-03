@@ -1,6 +1,6 @@
 use {
     super::{
-        DbAccountInfo, ReadableAccountInfo, SimplePostgresClient,
+        db_write_error, DbAccountInfo, ReadableAccountInfo, SimplePostgresClient,
         DEFAULT_ACCOUNTS_INSERT_BATCH_SIZE,
     },
     crate::{
@@ -8,13 +8,10 @@ use {
         inline_spl_token::{self, GenericTokenAccount},
         inline_spl_token_2022,
     },
-    log::*,
-    postgres::{Client, Statement},
     agave_geyser_plugin_interface::geyser_plugin_interface::GeyserPluginError,
-    solana_measure::measure::Measure,
-    solana_metrics::*,
-    solana_sdk::pubkey::Pubkey,
-    tokio_postgres::types,
+    log::*,
+    postgres::{types, Client, Statement},
+    solana_pubkey::Pubkey,
 };
 
 const TOKEN_INDEX_COLUMN_COUNT: usize = 3;
@@ -141,8 +138,6 @@ impl SimplePostgresClient {
         query: &Statement,
     ) -> Result<(), GeyserPluginError> {
         if index_entries.len() == batch_size {
-            let mut measure = Measure::start("geyser-plugin-postgres-prepare-index-values");
-
             let mut values: Vec<&(dyn types::ToSql + Sync)> =
                 Vec::with_capacity(batch_size * TOKEN_INDEX_COLUMN_COUNT);
             for index in index_entries.iter().take(batch_size) {
@@ -150,41 +145,14 @@ impl SimplePostgresClient {
                 values.push(&index.account_key);
                 values.push(&index.slot);
             }
-            measure.stop();
-            inc_new_counter_debug!(
-                "geyser-plugin-postgres-prepare-index-values-us",
-                measure.as_us() as usize,
-                10000,
-                10000
-            );
 
-            let mut measure = Measure::start("geyser-plugin-postgres-update-index-account");
             let result = client.query(query, &values);
 
             index_entries.clear();
 
             if let Err(err) = result {
-                let msg = format!(
-                    "Failed to persist the update of account to the PostgreSQL database. Error: {:?}",
-                    err
-                );
-                error!("{}", msg);
-                return Err(GeyserPluginError::AccountsUpdateError { msg });
+                return Err(db_write_error("token index bulk insert", err));
             }
-
-            measure.stop();
-            inc_new_counter_debug!(
-                "geyser-plugin-postgres-update-index-us",
-                measure.as_us() as usize,
-                10000,
-                10000
-            );
-            inc_new_counter_debug!(
-                "geyser-plugin-postgres-update-index-count",
-                batch_size,
-                10000,
-                10000
-            );
         }
         Ok(())
     }
@@ -298,12 +266,7 @@ impl SimplePostgresClient {
                 let slot = account.slot;
                 let result = client.execute(statement, &[&owner_key, &pubkey, &slot]);
                 if let Err(err) = result {
-                    let msg = format!(
-                        "Failed to update the token owner index to the PostgreSQL database. Error: {:?}",
-                        err
-                    );
-                    error!("{}", msg);
-                    return Err(GeyserPluginError::AccountsUpdateError { msg });
+                    return Err(db_write_error("token owner index update", err));
                 }
             }
         }
@@ -325,12 +288,7 @@ impl SimplePostgresClient {
                 let slot = account.slot;
                 let result = client.execute(statement, &[&mint_key, &pubkey, &slot]);
                 if let Err(err) = result {
-                    let msg = format!(
-                        "Failed to update the token mint index to the PostgreSQL database. Error: {:?}",
-                        err
-                    );
-                    error!("{}", msg);
-                    return Err(GeyserPluginError::AccountsUpdateError { msg });
+                    return Err(db_write_error("token mint index update", err));
                 }
             }
         }

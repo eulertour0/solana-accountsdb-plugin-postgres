@@ -1,11 +1,11 @@
 /// Partial SPL Token declarations inlined to avoid an external dependency on the spl-token crate
 /// Copied from solana-runtime
-use solana_sdk::pubkey::{Pubkey, PUBKEY_BYTES};
+use solana_pubkey::PUBKEY_BYTES;
 
-solana_sdk::declare_id!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+solana_pubkey::declare_id!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
 pub(crate) mod new_token_program {
-    solana_sdk::declare_id!("nTok2oJvx1CgbYA2SznfJLmnKLEL6sYdh2ypZms2nhm");
+    solana_pubkey::declare_id!("nTok2oJvx1CgbYA2SznfJLmnKLEL6sYdh2ypZms2nhm");
 }
 
 /*
@@ -30,21 +30,21 @@ pub(crate) trait GenericTokenAccount {
     fn valid_account_data(account_data: &[u8]) -> bool;
 
     // Call after account length has already been verified
-    fn unpack_account_owner_unchecked(account_data: &[u8]) -> &Pubkey {
+    fn unpack_account_owner_unchecked(account_data: &[u8]) -> &[u8] {
         Self::unpack_pubkey_unchecked(account_data, SPL_TOKEN_ACCOUNT_OWNER_OFFSET)
     }
 
     // Call after account length has already been verified
-    fn unpack_account_mint_unchecked(account_data: &[u8]) -> &Pubkey {
+    fn unpack_account_mint_unchecked(account_data: &[u8]) -> &[u8] {
         Self::unpack_pubkey_unchecked(account_data, SPL_TOKEN_ACCOUNT_MINT_OFFSET)
     }
 
     // Call after account length has already been verified
-    fn unpack_pubkey_unchecked(account_data: &[u8], offset: usize) -> &Pubkey {
-        bytemuck::from_bytes(&account_data[offset..offset + PUBKEY_BYTES])
+    fn unpack_pubkey_unchecked(account_data: &[u8], offset: usize) -> &[u8] {
+        &account_data[offset..offset + PUBKEY_BYTES]
     }
 
-    fn unpack_account_owner(account_data: &[u8]) -> Option<&Pubkey> {
+    fn unpack_account_owner(account_data: &[u8]) -> Option<&[u8]> {
         if Self::valid_account_data(account_data) {
             Some(Self::unpack_account_owner_unchecked(account_data))
         } else {
@@ -52,7 +52,7 @@ pub(crate) trait GenericTokenAccount {
         }
     }
 
-    fn unpack_account_mint(account_data: &[u8]) -> Option<&Pubkey> {
+    fn unpack_account_mint(account_data: &[u8]) -> Option<&[u8]> {
         if Self::valid_account_data(account_data) {
             Some(Self::unpack_account_mint_unchecked(account_data))
         } else {
@@ -75,7 +75,7 @@ impl GenericTokenAccount for Account {
 }
 
 pub mod native_mint {
-    solana_sdk::declare_id!("So11111111111111111111111111111111111111112");
+    solana_pubkey::declare_id!("So11111111111111111111111111111111111111112");
 
     /*
         Mint {

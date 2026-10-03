@@ -3,31 +3,39 @@
 use {
     crate::{
         geyser_plugin_postgres::{GeyserPluginPostgresConfig, GeyserPluginPostgresError},
-        postgres_client::{DbWorkItem, ParallelPostgresClient, SimplePostgresClient},
+        postgres_client::{
+            db_write_error, DbWorkItem, ParallelPostgresClient, SimplePostgresClient,
+        },
     },
-    agave_geyser_plugin_interface::geyser_plugin_interface::{
-        GeyserPluginError, ReplicaTransactionInfoV3,
-    },
+    agave_geyser_plugin_interface::geyser_plugin_interface::GeyserPluginError,
     chrono::Utc,
     log::*,
     postgres::{Client, Statement},
     postgres_types::{FromSql, ToSql},
-    solana_message::{compiled_instruction::CompiledInstruction, VersionedMessage},
-    solana_runtime::bank::RewardType,
-    solana_sdk::{
-        message::{
-            v0::{self, LoadedAddresses, MessageAddressTableLookup},
-            Message, MessageHeader,
-        },
-        transaction::TransactionError,
+    solana_hash::Hash,
+    solana_message::{
+        compiled_instruction::CompiledInstruction,
+        v0::{self, LoadedAddresses, MessageAddressTableLookup},
+        v1, Message, MessageHeader, VersionedMessage,
     },
+    solana_reward_info::RewardType,
+    solana_signature::Signature,
+    solana_transaction::versioned::VersionedTransaction,
+    solana_transaction_error::TransactionError,
     solana_transaction_status::{
         InnerInstructions, Reward, TransactionStatusMeta, TransactionTokenBalance,
     },
     std::sync::atomic::Ordering,
 };
 
+/// Must match the size of `"TransactionError".error_detail` (VARCHAR(256)).
 const MAX_TRANSACTION_STATUS_LEN: usize = 256;
+
+/// `transaction.message_type` values. Legacy and v0 are what downstream consumers
+/// read; v1 messages (no address lookup tables) are stored in `legacy_message`.
+pub const MESSAGE_TYPE_LEGACY: i16 = 0;
+pub const MESSAGE_TYPE_V0: i16 = 1;
+pub const MESSAGE_TYPE_V1: i16 = 2;
 
 #[derive(Clone, Debug, FromSql, ToSql)]
 #[postgres(name = "CompiledInstruction")]
@@ -60,6 +68,9 @@ pub enum DbRewardType {
     Rent,
     Staking,
     Voting,
+    // Added by scripts/migrate_agave_v4_3.sql
+    DeactivatedStake,
+    VATDebit,
 }
 
 #[derive(Clone, Debug, FromSql, ToSql)]
@@ -156,6 +167,39 @@ pub struct LogTransactionRequest {
     pub transaction_info: DbTransaction,
 }
 
+/// Version independent view of a transaction notification
+/// (`ReplicaTransactionInfo`, `V2` and `V3`).
+pub struct TransactionNotification<'a> {
+    pub signature: &'a Signature,
+    pub is_vote: bool,
+    pub transaction: &'a VersionedTransaction,
+    pub message_hash: &'a Hash,
+    pub meta: &'a TransactionStatusMeta,
+    pub index: usize,
+}
+
+/// Keeps the head of `text`, bounded to `max_chars` characters (VARCHAR(n) counts
+/// characters), and drops NUL characters which PostgreSQL text types reject.
+pub(crate) fn bounded_text(text: String, max_chars: usize) -> String {
+    let mut text = if text.contains('\0') {
+        text.replace('\0', "")
+    } else {
+        text
+    };
+    if let Some((byte_index, _)) = text.char_indices().nth(max_chars) {
+        text.truncate(byte_index);
+    }
+    text
+}
+
+fn strip_nul(text: &str) -> String {
+    if text.contains('\0') {
+        text.replace('\0', "")
+    } else {
+        text.to_string()
+    }
+}
+
 impl From<&MessageAddressTableLookup> for DbTransactionMessageAddressTableLookup {
     fn from(address_table_lookup: &MessageAddressTableLookup) -> Self {
         Self {
@@ -177,16 +221,8 @@ impl From<&MessageAddressTableLookup> for DbTransactionMessageAddressTableLookup
 impl From<&LoadedAddresses> for DbLoadedAddresses {
     fn from(loaded_addresses: &LoadedAddresses) -> Self {
         Self {
-            writable: loaded_addresses
-                .writable
-                .iter()
-                .map(|pubkey| pubkey.as_ref().to_vec())
-                .collect(),
-            readonly: loaded_addresses
-                .readonly
-                .iter()
-                .map(|pubkey| pubkey.as_ref().to_vec())
-                .collect(),
+            writable: db_account_keys(&loaded_addresses.writable),
+            readonly: db_account_keys(&loaded_addresses.readonly),
         }
     }
 }
@@ -215,21 +251,38 @@ impl From<&CompiledInstruction> for DbCompiledInstruction {
     }
 }
 
+fn db_account_keys<T: AsRef<[u8]>>(keys: &[T]) -> Vec<Vec<u8>> {
+    keys.iter().map(|key| key.as_ref().to_vec()).collect()
+}
+
+fn db_instructions(instructions: &[CompiledInstruction]) -> Vec<DbCompiledInstruction> {
+    instructions
+        .iter()
+        .map(DbCompiledInstruction::from)
+        .collect()
+}
+
 impl From<&Message> for DbTransactionMessage {
     fn from(message: &Message) -> Self {
         Self {
             header: DbTransactionMessageHeader::from(&message.header),
-            account_keys: message
-                .account_keys
-                .iter()
-                .map(|key| key.as_ref().to_vec())
-                .collect(),
+            account_keys: db_account_keys(&message.account_keys),
             recent_blockhash: message.recent_blockhash.as_ref().to_vec(),
-            instructions: message
-                .instructions
-                .iter()
-                .map(DbCompiledInstruction::from)
-                .collect(),
+            instructions: db_instructions(&message.instructions),
+        }
+    }
+}
+
+/// v1 messages have no address lookup tables; the lifetime specifier (blockhash
+/// or nonce) is stored as `recent_blockhash`. The v1 compute budget config is not
+/// stored.
+impl From<&v1::Message> for DbTransactionMessage {
+    fn from(message: &v1::Message) -> Self {
+        Self {
+            header: DbTransactionMessageHeader::from(&message.header),
+            account_keys: db_account_keys(&message.account_keys),
+            recent_blockhash: message.lifetime_specifier.as_ref().to_vec(),
+            instructions: db_instructions(&message.instructions),
         }
     }
 }
@@ -238,17 +291,9 @@ impl From<&v0::Message> for DbTransactionMessageV0 {
     fn from(message: &v0::Message) -> Self {
         Self {
             header: DbTransactionMessageHeader::from(&message.header),
-            account_keys: message
-                .account_keys
-                .iter()
-                .map(|key| key.as_ref().to_vec())
-                .collect(),
+            account_keys: db_account_keys(&message.account_keys),
             recent_blockhash: message.recent_blockhash.as_ref().to_vec(),
-            instructions: message
-                .instructions
-                .iter()
-                .map(DbCompiledInstruction::from)
-                .collect(),
+            instructions: db_instructions(&message.instructions),
             address_table_lookups: message
                 .address_table_lookups
                 .iter()
@@ -258,22 +303,13 @@ impl From<&v0::Message> for DbTransactionMessageV0 {
     }
 }
 
-impl<'a> From<&v0::Message> for DbLoadedMessageV0 {
-    fn from(message: &v0::Message) -> Self {
+impl DbLoadedMessageV0 {
+    /// The loaded addresses are the ALT-resolved keys from the transaction status
+    /// meta (the previous implementation stored the lookup indexes instead).
+    fn new(message: &v0::Message, loaded_addresses: &LoadedAddresses) -> Self {
         Self {
             message: DbTransactionMessageV0::from(message),
-            loaded_addresses: DbLoadedAddresses {
-                writable: message
-                    .address_table_lookups
-                    .iter()
-                    .map(|adress_table_lookup| adress_table_lookup.writable_indexes.clone())
-                    .collect(),
-                readonly: message
-                    .address_table_lookups
-                    .iter()
-                    .map(|adress_table_lookup| adress_table_lookup.readonly_indexes.clone())
-                    .collect(),
-            },
+            loaded_addresses: DbLoadedAddresses::from(loaded_addresses),
         }
     }
 }
@@ -298,12 +334,10 @@ impl From<&RewardType> for DbRewardType {
             RewardType::Rent => Self::Rent,
             RewardType::Staking => Self::Staking,
             RewardType::Voting => Self::Voting,
+            RewardType::DeactivatedStake => Self::DeactivatedStake,
+            RewardType::VATDebit => Self::VATDebit,
         }
     }
-}
-
-fn get_reward_type(reward: &Option<RewardType>) -> Option<DbRewardType> {
-    reward.as_ref().map(DbRewardType::from)
 }
 
 impl From<&Reward> for DbReward {
@@ -312,7 +346,7 @@ impl From<&Reward> for DbReward {
             pubkey: reward.pubkey.clone(),
             lamports: reward.lamports,
             post_balance: reward.post_balance as i64,
-            reward_type: get_reward_type(&reward.reward_type),
+            reward_type: reward.reward_type.as_ref().map(DbRewardType::from),
             commission: reward
                 .commission
                 .as_ref()
@@ -321,6 +355,9 @@ impl From<&Reward> for DbReward {
     }
 }
 
+/// Labels of the PostgreSQL enum "TransactionErrorCode". Every label used here must
+/// exist in the database (see scripts/migrate_agave_v4_3.sql); a missing label makes
+/// the row insert fail with SQLSTATE 22P02.
 #[derive(Clone, Debug, Eq, FromSql, ToSql, PartialEq)]
 #[postgres(name = "TransactionErrorCode")]
 pub enum DbTransactionErrorCode {
@@ -362,9 +399,18 @@ pub enum DbTransactionErrorCode {
     ResanitizationNeeded,
     UnbalancedTransaction,
     ProgramExecutionTemporarilyRestricted,
+    // Added by scripts/migrate_agave_v4_3.sql
+    ProgramCacheHitMaxLimit,
+    CommitCancelled,
+    /// Reserved fallback label for errors the plugin cannot classify; the error
+    /// text then goes to `error_detail`. Not produced for any current variant.
+    Unknown,
 }
 
 impl From<&TransactionError> for DbTransactionErrorCode {
+    // The match is deliberately exhaustive (no wildcard): `TransactionError` is not
+    // `#[non_exhaustive]`, so a variant added by a future agave fails the build here
+    // instead of being silently mislabeled, and no runtime path can panic.
     fn from(err: &TransactionError) -> Self {
         match err {
             TransactionError::AccountInUse => Self::AccountInUse,
@@ -408,9 +454,7 @@ impl From<&TransactionError> for DbTransactionErrorCode {
             TransactionError::InvalidRentPayingAccount => Self::InvalidRentPayingAccount,
             TransactionError::WouldExceedMaxVoteCostLimit => Self::WouldExceedMaxVoteCostLimit,
             TransactionError::DuplicateInstruction(_) => Self::DuplicateInstruction,
-            TransactionError::InsufficientFundsForRent { account_index: _ } => {
-                Self::InsufficientFundsForRent
-            }
+            TransactionError::InsufficientFundsForRent { .. } => Self::InsufficientFundsForRent,
             TransactionError::MaxLoadedAccountsDataSizeExceeded => {
                 Self::MaxLoadedAccountsDataSizeExceeded
             }
@@ -419,11 +463,11 @@ impl From<&TransactionError> for DbTransactionErrorCode {
             }
             TransactionError::ResanitizationNeeded => Self::ResanitizationNeeded,
             TransactionError::UnbalancedTransaction => Self::UnbalancedTransaction,
-            TransactionError::ProgramExecutionTemporarilyRestricted { account_index: _ } => {
+            TransactionError::ProgramExecutionTemporarilyRestricted { .. } => {
                 Self::ProgramExecutionTemporarilyRestricted
             }
-            TransactionError::ProgramCacheHitMaxLimit => todo!(),
-            TransactionError::CommitCancelled => todo!(),
+            TransactionError::ProgramCacheHitMaxLimit => Self::ProgramCacheHitMaxLimit,
+            TransactionError::CommitCancelled => Self::CommitCancelled,
         }
     }
 }
@@ -436,29 +480,23 @@ pub struct DbTransactionError {
 }
 
 fn get_transaction_error(result: &Result<(), TransactionError>) -> Option<DbTransactionError> {
-    if result.is_ok() {
-        return None;
-    }
-
-    let error = result.as_ref().err().unwrap();
+    let error = result.as_ref().err()?;
+    let error_detail = match error {
+        TransactionError::InstructionError(idx, instruction_error) => Some(format!(
+            "InstructionError: idx ({idx}), error: ({instruction_error})"
+        )),
+        TransactionError::DuplicateInstruction(idx) => {
+            Some(format!("DuplicateInstruction: idx ({idx})"))
+        }
+        TransactionError::InsufficientFundsForRent { account_index }
+        | TransactionError::ProgramExecutionTemporarilyRestricted { account_index } => {
+            Some(format!("account_index ({account_index})"))
+        }
+        _ => None,
+    };
     Some(DbTransactionError {
         error_code: DbTransactionErrorCode::from(error),
-        error_detail: {
-            if let TransactionError::InstructionError(idx, instruction_error) = error {
-                let mut error_detail = format!(
-                    "InstructionError: idx ({}), error: ({})",
-                    idx, instruction_error
-                );
-                if error_detail.len() > MAX_TRANSACTION_STATUS_LEN {
-                    error_detail = error_detail
-                        .to_string()
-                        .split_off(MAX_TRANSACTION_STATUS_LEN);
-                }
-                Some(error_detail)
-            } else {
-                None
-            }
-        },
+        error_detail: error_detail.map(|detail| bounded_text(detail, MAX_TRANSACTION_STATUS_LEN)),
     })
 }
 
@@ -492,7 +530,10 @@ impl From<&TransactionStatusMeta> for DbTransactionStatusMeta {
                 .inner_instructions
                 .as_ref()
                 .map(|instructions| instructions.iter().map(DbInnerInstructions::from).collect()),
-            log_messages: meta.log_messages.clone(),
+            log_messages: meta
+                .log_messages
+                .as_ref()
+                .map(|messages| messages.iter().map(|message| strip_nul(message)).collect()),
             pre_token_balances: meta.pre_token_balances.as_ref().map(|balances| {
                 balances
                     .iter()
@@ -513,42 +554,47 @@ impl From<&TransactionStatusMeta> for DbTransactionStatusMeta {
     }
 }
 
-fn build_db_transaction(
+pub(crate) fn build_db_transaction(
     slot: u64,
-    transaction_info: &ReplicaTransactionInfoV3,
+    transaction_info: &TransactionNotification,
     transaction_write_version: u64,
 ) -> DbTransaction {
+    let (message_type, legacy_message, v0_loaded_message) =
+        match &transaction_info.transaction.message {
+            VersionedMessage::Legacy(message) => (
+                MESSAGE_TYPE_LEGACY,
+                Some(DbTransactionMessage::from(message)),
+                None,
+            ),
+            VersionedMessage::V0(message) => (
+                MESSAGE_TYPE_V0,
+                None,
+                Some(DbLoadedMessageV0::new(
+                    message,
+                    &transaction_info.meta.loaded_addresses,
+                )),
+            ),
+            VersionedMessage::V1(message) => (
+                MESSAGE_TYPE_V1,
+                Some(DbTransactionMessage::from(message)),
+                None,
+            ),
+        };
     DbTransaction {
         signature: transaction_info.signature.as_ref().to_vec(),
         is_vote: transaction_info.is_vote,
         slot: slot as i64,
-        message_type: match &transaction_info.transaction.message {
-            VersionedMessage::Legacy(_) => 0,
-            VersionedMessage::V0(_) => 1,
-        },
-        legacy_message: match &transaction_info.transaction.message {
-            VersionedMessage::Legacy(legacy_message) => {
-                Some(DbTransactionMessage::from(legacy_message))
-            }
-            _ => None,
-        },
-        v0_loaded_message: match &transaction_info.transaction.message {
-            VersionedMessage::V0(loaded_message) => Some(DbLoadedMessageV0::from(loaded_message)),
-            _ => None,
-        },
+        message_type,
+        legacy_message,
+        v0_loaded_message,
         signatures: transaction_info
             .transaction
             .signatures
             .iter()
             .map(|signature| signature.as_ref().to_vec())
             .collect(),
-        message_hash: transaction_info
-            .transaction
-            .message
-            .hash()
-            .as_ref()
-            .to_vec(),
-        meta: DbTransactionStatusMeta::from(transaction_info.transaction_status_meta),
+        message_hash: transaction_info.message_hash.as_ref().to_vec(),
+        meta: DbTransactionStatusMeta::from(transaction_info.meta),
         write_version: transaction_write_version as i64,
         index: transaction_info.index as i64,
     }
@@ -598,7 +644,7 @@ impl SimplePostgresClient {
         let updated_on = Utc::now().naive_utc();
 
         let transaction_info = transaction_log_info.transaction_info;
-        let result = client.query(
+        let result = client.execute(
             statement,
             &[
                 &transaction_info.signature,
@@ -617,12 +663,14 @@ impl SimplePostgresClient {
         );
 
         if let Err(err) = result {
-            let msg = format!(
-                "Failed to persist the update of transaction info to the PostgreSQL database. Error: {:?}",
-                err
-            );
-            error!("{}", msg);
-            return Err(GeyserPluginError::AccountsUpdateError { msg });
+            return Err(db_write_error(
+                &format!(
+                    "transaction {} at slot {}",
+                    bs58::encode(&transaction_info.signature).into_string(),
+                    transaction_info.slot
+                ),
+                err,
+            ));
         }
 
         Ok(())
@@ -630,38 +678,306 @@ impl SimplePostgresClient {
 }
 
 impl ParallelPostgresClient {
-    fn build_transaction_request(
-        slot: u64,
-        transaction_info: &ReplicaTransactionInfoV3,
-        transaction_write_version: u64,
-    ) -> LogTransactionRequest {
-        LogTransactionRequest {
-            transaction_info: build_db_transaction(
-                slot,
-                transaction_info,
-                transaction_write_version,
-            ),
-        }
-    }
-
     pub fn log_transaction_info(
         &self,
-        transaction_info: &ReplicaTransactionInfoV3,
+        transaction_info: &TransactionNotification,
         slot: u64,
     ) -> Result<(), GeyserPluginError> {
-        self.transaction_write_version
-            .fetch_add(1, Ordering::Relaxed);
-        let wrk_item = DbWorkItem::LogTransaction(Box::new(Self::build_transaction_request(
-            slot,
-            transaction_info,
-            self.transaction_write_version.load(Ordering::Relaxed),
-        )));
+        let write_version = self
+            .transaction_write_version
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        let transaction_info = build_db_transaction(slot, transaction_info, write_version);
+        if log::log_enabled!(log::Level::Trace) {
+            trace!(
+                "queue transaction signature={} slot={} index={} message_type={} \
+                 account_keys={} loaded={}/{} fee={} error={:?}",
+                bs58::encode(&transaction_info.signature).into_string(),
+                transaction_info.slot,
+                transaction_info.index,
+                transaction_info.message_type,
+                transaction_info
+                    .legacy_message
+                    .as_ref()
+                    .map(|message| message.account_keys.len())
+                    .or_else(|| {
+                        transaction_info
+                            .v0_loaded_message
+                            .as_ref()
+                            .map(|message| message.message.account_keys.len())
+                    })
+                    .unwrap_or_default(),
+                transaction_info
+                    .v0_loaded_message
+                    .as_ref()
+                    .map_or(0, |message| message.loaded_addresses.writable.len()),
+                transaction_info
+                    .v0_loaded_message
+                    .as_ref()
+                    .map_or(0, |message| message.loaded_addresses.readonly.len()),
+                transaction_info.meta.fee,
+                transaction_info.meta.error,
+            );
+        }
+        let wrk_item =
+            DbWorkItem::LogTransaction(Box::new(LogTransactionRequest { transaction_info }));
 
         if let Err(err) = self.sender.send(wrk_item) {
-            return Err(GeyserPluginError::SlotStatusUpdateError {
+            return Err(GeyserPluginError::TransactionUpdateError {
                 msg: format!("Failed to update the transaction, error: {:?}", err),
             });
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use {
+        super::*, solana_instruction_error::InstructionError, solana_pubkey::Pubkey,
+        solana_transaction_status::InnerInstruction,
+    };
+
+    const CREATE_SCHEMA: &str = include_str!("../../scripts/create_schema.sql");
+    const MIGRATION: &str = include_str!("../../scripts/migrate_agave_v4_3.sql");
+
+    #[test]
+    fn test_bounded_text_keeps_head() {
+        let text = format!("{}{}", "a".repeat(MAX_TRANSACTION_STATUS_LEN), "TAIL");
+        let bounded = bounded_text(text, MAX_TRANSACTION_STATUS_LEN);
+        assert_eq!(bounded, "a".repeat(MAX_TRANSACTION_STATUS_LEN));
+
+        // Multi-byte characters are counted as characters, as VARCHAR(n) does.
+        let text = "\u{3042}".repeat(300);
+        let bounded = bounded_text(text, MAX_TRANSACTION_STATUS_LEN);
+        assert_eq!(bounded.chars().count(), MAX_TRANSACTION_STATUS_LEN);
+
+        assert_eq!(bounded_text("a\0b".to_string(), 10), "ab");
+        assert_eq!(bounded_text("short".to_string(), 10), "short");
+    }
+
+    #[test]
+    fn test_instruction_error_detail_head() {
+        let error = TransactionError::InstructionError(3, InstructionError::Custom(6001));
+        let db_error = get_transaction_error(&Err(error)).unwrap();
+        assert_eq!(
+            db_error.error_code,
+            DbTransactionErrorCode::InstructionError
+        );
+        let detail = db_error.error_detail.unwrap();
+        assert!(detail.starts_with("InstructionError: idx (3), error: ("));
+        assert!(detail.chars().count() <= MAX_TRANSACTION_STATUS_LEN);
+    }
+
+    #[test]
+    fn test_all_transaction_errors_map_without_panic() {
+        let errors = [
+            TransactionError::AccountInUse,
+            TransactionError::AccountLoadedTwice,
+            TransactionError::AccountNotFound,
+            TransactionError::ProgramAccountNotFound,
+            TransactionError::InsufficientFundsForFee,
+            TransactionError::InvalidAccountForFee,
+            TransactionError::AlreadyProcessed,
+            TransactionError::BlockhashNotFound,
+            TransactionError::InstructionError(0, InstructionError::GenericError),
+            TransactionError::CallChainTooDeep,
+            TransactionError::MissingSignatureForFee,
+            TransactionError::InvalidAccountIndex,
+            TransactionError::SignatureFailure,
+            TransactionError::InvalidProgramForExecution,
+            TransactionError::SanitizeFailure,
+            TransactionError::ClusterMaintenance,
+            TransactionError::AccountBorrowOutstanding,
+            TransactionError::WouldExceedMaxBlockCostLimit,
+            TransactionError::UnsupportedVersion,
+            TransactionError::InvalidWritableAccount,
+            TransactionError::WouldExceedMaxAccountCostLimit,
+            TransactionError::WouldExceedAccountDataBlockLimit,
+            TransactionError::TooManyAccountLocks,
+            TransactionError::AddressLookupTableNotFound,
+            TransactionError::InvalidAddressLookupTableOwner,
+            TransactionError::InvalidAddressLookupTableData,
+            TransactionError::InvalidAddressLookupTableIndex,
+            TransactionError::InvalidRentPayingAccount,
+            TransactionError::WouldExceedMaxVoteCostLimit,
+            TransactionError::WouldExceedAccountDataTotalLimit,
+            TransactionError::DuplicateInstruction(1),
+            TransactionError::InsufficientFundsForRent { account_index: 2 },
+            TransactionError::MaxLoadedAccountsDataSizeExceeded,
+            TransactionError::InvalidLoadedAccountsDataSizeLimit,
+            TransactionError::ResanitizationNeeded,
+            TransactionError::ProgramExecutionTemporarilyRestricted { account_index: 3 },
+            TransactionError::UnbalancedTransaction,
+            TransactionError::ProgramCacheHitMaxLimit,
+            TransactionError::CommitCancelled,
+        ];
+        for error in errors {
+            let db_error = get_transaction_error(&Err(error.clone())).unwrap();
+            assert_ne!(
+                db_error.error_code,
+                DbTransactionErrorCode::Unknown,
+                "{error:?}"
+            );
+            let label = format!("'{:?}'", db_error.error_code);
+            assert!(
+                CREATE_SCHEMA.contains(&label),
+                "{label} missing from schema"
+            );
+        }
+        for label in ["ProgramCacheHitMaxLimit", "CommitCancelled", "Unknown"] {
+            assert!(MIGRATION.contains(&format!("ADD VALUE IF NOT EXISTS '{label}'")));
+        }
+        assert!(get_transaction_error(&Ok(())).is_none());
+    }
+
+    #[test]
+    fn test_reward_types_in_schema() {
+        for reward_type in [
+            RewardType::Fee,
+            RewardType::Rent,
+            RewardType::Staking,
+            RewardType::Voting,
+            RewardType::DeactivatedStake,
+            RewardType::VATDebit,
+        ] {
+            let label = format!("'{:?}'", DbRewardType::from(&reward_type));
+            assert!(
+                CREATE_SCHEMA.contains(&label),
+                "{label} missing from schema"
+            );
+        }
+        for label in ["DeactivatedStake", "VATDebit"] {
+            assert!(MIGRATION.contains(&format!("ADD VALUE IF NOT EXISTS '{label}'")));
+        }
+    }
+
+    fn sample_meta(loaded_addresses: LoadedAddresses) -> TransactionStatusMeta {
+        TransactionStatusMeta {
+            status: Err(TransactionError::CommitCancelled),
+            fee: 5000,
+            pre_balances: vec![10, 20],
+            post_balances: vec![5, 20],
+            inner_instructions: Some(vec![InnerInstructions {
+                index: 0,
+                instructions: vec![InnerInstruction {
+                    instruction: CompiledInstruction::new_from_raw_parts(1, vec![7], vec![0]),
+                    stack_height: Some(2),
+                }],
+            }]),
+            log_messages: Some(vec!["Program log: a\0b".to_string()]),
+            loaded_addresses,
+            ..TransactionStatusMeta::default()
+        }
+    }
+
+    #[test]
+    fn test_build_v0_transaction_uses_loaded_addresses() {
+        let payer = Pubkey::new_from_array([1; 32]);
+        let program = Pubkey::new_from_array([2; 32]);
+        let table = Pubkey::new_from_array([3; 32]);
+        let loaded_writable = Pubkey::new_from_array([4; 32]);
+        let loaded_readonly = Pubkey::new_from_array([5; 32]);
+        let message = v0::Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 1,
+            },
+            account_keys: vec![payer, program],
+            recent_blockhash: Hash::new_from_array([9; 32]),
+            instructions: vec![CompiledInstruction::new_from_raw_parts(
+                1,
+                vec![1, 2],
+                vec![0, 2, 3],
+            )],
+            address_table_lookups: vec![MessageAddressTableLookup {
+                account_key: table,
+                writable_indexes: vec![7],
+                readonly_indexes: vec![8],
+            }],
+        };
+        let transaction = VersionedTransaction {
+            signatures: vec![Signature::from([6; 64])],
+            message: VersionedMessage::V0(message),
+        };
+        let meta = sample_meta(LoadedAddresses {
+            writable: vec![loaded_writable],
+            readonly: vec![loaded_readonly],
+        });
+        let message_hash = Hash::new_from_array([8; 32]);
+        let notification = TransactionNotification {
+            signature: &transaction.signatures[0],
+            is_vote: false,
+            transaction: &transaction,
+            message_hash: &message_hash,
+            meta: &meta,
+            index: 17,
+        };
+        let db = build_db_transaction(42, &notification, 3);
+        assert_eq!(db.message_type, MESSAGE_TYPE_V0);
+        assert!(db.legacy_message.is_none());
+        let loaded = db.v0_loaded_message.unwrap();
+        assert_eq!(loaded.message.account_keys[0], payer.as_ref().to_vec());
+        assert_eq!(
+            loaded.loaded_addresses.writable,
+            vec![loaded_writable.as_ref().to_vec()]
+        );
+        assert_eq!(
+            loaded.loaded_addresses.readonly,
+            vec![loaded_readonly.as_ref().to_vec()]
+        );
+        assert_eq!(db.message_hash, vec![8; 32]);
+        assert_eq!(db.index, 17);
+        assert_eq!(db.slot, 42);
+        assert_eq!(db.write_version, 3);
+        assert_eq!(db.meta.fee, 5000);
+        assert_eq!(
+            db.meta.error.unwrap().error_code,
+            DbTransactionErrorCode::CommitCancelled
+        );
+        assert_eq!(
+            db.meta.log_messages.unwrap(),
+            vec!["Program log: ab".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_build_legacy_transaction() {
+        let payer = Pubkey::new_from_array([1; 32]);
+        let message = Message {
+            header: MessageHeader {
+                num_required_signatures: 1,
+                num_readonly_signed_accounts: 0,
+                num_readonly_unsigned_accounts: 0,
+            },
+            account_keys: vec![payer],
+            recent_blockhash: Hash::new_from_array([9; 32]),
+            instructions: vec![],
+        };
+        let transaction = VersionedTransaction {
+            signatures: vec![Signature::from([6; 64])],
+            message: VersionedMessage::Legacy(message),
+        };
+        let mut meta = sample_meta(LoadedAddresses::default());
+        meta.status = Ok(());
+        let message_hash = Hash::default();
+        let notification = TransactionNotification {
+            signature: &transaction.signatures[0],
+            is_vote: true,
+            transaction: &transaction,
+            message_hash: &message_hash,
+            meta: &meta,
+            index: 0,
+        };
+        let db = build_db_transaction(1, &notification, 1);
+        assert_eq!(db.message_type, MESSAGE_TYPE_LEGACY);
+        assert!(db.v0_loaded_message.is_none());
+        assert_eq!(
+            db.legacy_message.unwrap().account_keys,
+            vec![payer.as_ref().to_vec()]
+        );
+        assert!(db.meta.error.is_none());
+        assert!(db.is_vote);
     }
 }

@@ -2,7 +2,7 @@
 /// Copied from solana-runtime
 use crate::inline_spl_token::{self, GenericTokenAccount};
 
-solana_sdk::declare_id!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+solana_pubkey::declare_id!("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 
 // `spl_token_program_2022::extension::AccountType::Account` ordinal value
 const ACCOUNTTYPE_ACCOUNT: u8 = 2;

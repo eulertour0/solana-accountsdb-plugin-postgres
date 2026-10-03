@@ -3,51 +3,48 @@ authors = ["Solana Maintainers <maintainers@solana.foundation>"]
 edition = "2021"
 name = "solana-geyser-plugin-postgres"
 description = "The Solana AccountsDb plugin for PostgreSQL database."
-version = "2.3.6"
+version = "4.3.0"
 repository = "https://github.com/solana-labs/solana-accountsdb-plugin-postgres"
 license = "Apache-2.0"
 homepage = "https://solana.com/"
 documentation = "https://docs.rs/solana-validator"
+rust-version = "1.97.1"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# The plugin is loaded into an agave v4.3.0 validator via dlopen and shares
+# trait objects and repr(Rust) types with it, so every crate whose types cross
+# the plugin boundary must be the exact source the validator is built from.
+# The agave source is expected as a sibling checkout at ../agave-v4.3.0
+# (tag v4.3.0, commit 825efd18); see README "Building for agave v4.3.0".
+# Registry crates below are pinned to the versions in agave v4.3.0's Cargo.lock.
 [dependencies]
-bs58 = "0.4.0"
-bytemuck = "1.12.1"
-chrono = { version = "0.4.24", features = ["serde"] }
-crossbeam-channel = "0.5.7"
-log = "0.4.17"
+agave-geyser-plugin-interface = { path = "../agave-v4.3.0/geyser-plugin-interface" }
+solana-transaction-status = { path = "../agave-v4.3.0/transaction-status", features = ["agave-unstable-api"] }
+log = "=0.4.33"
+solana-clock = "=3.2.0"
+solana-hash = "=4.6.0"
+solana-message = "=4.5.0"
+solana-pubkey = { version = "=4.3.0", default-features = false }
+solana-reward-info = "=7.0.0"
+solana-signature = { version = "=3.5.2", default-features = false }
+solana-transaction = "=4.2.0"
+solana-transaction-error = "=3.4.0"
+
+bs58 = "0.5.1"
+chrono = { version = "0.4.45", features = ["serde"] }
+crossbeam-channel = "0.5.16"
 openssl = { version = "0.10.42" }
 postgres = { version = "0.19.4", features = ["with-chrono-0_4"] }
+postgres-openssl = { version = "0.5.0" }
 postgres-types = { version = "0.2.4", features = ["derive"] }
-postgres-openssl = { version = "0.5.0"}
-serde = "1.0.145"
-serde_derive = "1.0.145"
-serde_json = "1.0.85"
-agave-geyser-plugin-interface = { version = "3.0.8" }
-solana-logger = { version = "3.0.0" }
-solana-measure = { version = "3.0.0" }
-solana-metrics = { version = "3.0.0" }
-solana-runtime = { version = "3.0.0" }
-solana-sdk = { version = "3.0.0" }
-solana-transaction-status = { version = "3.0.0" }
-solana-message = { version = "3.0.1" }
-thiserror = "1.0.37"
-tokio-postgres = "0.7.7"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.19"
 
 [dev-dependencies]
-libc = "0.2.134"
-libloading = "0.7.3"
-serial_test = "0.9.0"
-socket2 = { version = "0.4.7", features = ["all"] }
-
-solana-account-decoder = { version = "2.2.1" }
-solana-core = { version = "2.2.1" }
-solana-local-cluster = { version = "2.2.1" }
-solana-net-utils = { version = "2.2.1" }
-solana-streamer = { version = "2.2.1" }
-tempfile = "3.3.0"
+solana-instruction-error = "=2.5.0"
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]

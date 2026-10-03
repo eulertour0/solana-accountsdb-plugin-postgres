@@ -16,7 +16,7 @@ impl AccountsSelector {
         }
     }
 
-    pub fn new(accounts: &[String], owners: &[String]) -> Self {
+    pub fn new(accounts: &[String], owners: &[String]) -> Result<Self, String> {
         info!(
             "Creating AccountsSelector from accounts: {:?}, owners: {:?}",
             accounts, owners
@@ -24,25 +24,26 @@ impl AccountsSelector {
 
         let select_all_accounts = accounts.iter().any(|key| key == "*");
         if select_all_accounts {
-            return AccountsSelector {
+            return Ok(AccountsSelector {
                 accounts: HashSet::default(),
                 owners: HashSet::default(),
                 select_all_accounts,
-            };
+            });
         }
-        let accounts = accounts
-            .iter()
-            .map(|key| bs58::decode(key).into_vec().unwrap())
-            .collect();
-        let owners = owners
-            .iter()
-            .map(|key| bs58::decode(key).into_vec().unwrap())
-            .collect();
-        AccountsSelector {
-            accounts,
-            owners,
+        let decode = |keys: &[String]| {
+            keys.iter()
+                .map(|key| {
+                    bs58::decode(key)
+                        .into_vec()
+                        .map_err(|err| format!("Invalid accounts_selector key {key:?}: {err}"))
+                })
+                .collect::<Result<HashSet<_>, _>>()
+        };
+        Ok(AccountsSelector {
+            accounts: decode(accounts)?,
+            owners: decode(owners)?,
             select_all_accounts,
-        }
+        })
     }
 
     pub fn is_account_selected(&self, account: &[u8], owner: &[u8]) -> bool {
@@ -64,11 +65,13 @@ pub(crate) mod tests {
         AccountsSelector::new(
             &["9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string()],
             &[],
-        );
+        )
+        .unwrap();
 
         AccountsSelector::new(
             &[],
             &["9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin".to_string()],
-        );
+        )
+        .unwrap();
     }
 }
