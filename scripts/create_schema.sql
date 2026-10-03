@@ -25,7 +25,7 @@ CREATE INDEX account_slot ON account (slot);
 CREATE TABLE slot (
     slot BIGINT PRIMARY KEY,
     parent BIGINT,
-    status VARCHAR(16) NOT NULL,
+    status VARCHAR(32) NOT NULL,
     updated_on TIMESTAMP NOT NULL
 );
 
@@ -69,7 +69,10 @@ Create TYPE "TransactionErrorCode" AS ENUM (
     'InvalidLoadedAccountsDataSizeLimit',
     'ResanitizationNeeded',
     'UnbalancedTransaction',
-    'ProgramExecutionTemporarilyRestricted'
+    'ProgramExecutionTemporarilyRestricted',
+    'ProgramCacheHitMaxLimit',
+    'CommitCancelled',
+    'Unknown'
 );
 
 CREATE TYPE "TransactionError" AS (
@@ -99,7 +102,9 @@ Create TYPE "RewardType" AS ENUM (
     'Fee',
     'Rent',
     'Staking',
-    'Voting'
+    'Voting',
+    'DeactivatedStake',
+    'VATDebit'
 );
 
 CREATE TYPE "Reward" AS (
