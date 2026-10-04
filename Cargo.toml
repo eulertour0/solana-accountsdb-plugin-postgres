@@ -22,6 +22,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 agave-geyser-plugin-interface = { path = "../agave-v4.3.0/geyser-plugin-interface" }
 solana-transaction-status = { path = "../agave-v4.3.0/transaction-status", features = ["agave-unstable-api"] }
+solana-transaction-context = { path = "../agave-v4.3.0/transaction-context", features = ["agave-unstable-api"] }
 log = "=0.4.33"
 solana-clock = "=3.2.0"
 solana-hash = "=4.6.0"
@@ -32,6 +33,7 @@ solana-signature = { version = "=3.5.2", default-features = false }
 solana-transaction = "=4.2.0"
 solana-transaction-error = "=3.4.0"
 
+base64 = "0.22.1"
 bs58 = "0.5.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 crossbeam-channel = "0.5.16"

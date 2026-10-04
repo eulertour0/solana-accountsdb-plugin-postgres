@@ -1,0 +1,41 @@
+{
+ "blockTime": 1780877596,
+ "meta": {
+  "computeUnitsConsumed": 2100,
+  "costUnits": 3465,
+  "err": null,
+  "fee": 5000,
+  "innerInstructions": [],
+  "loadedAddresses": {
+   "readonly": [],
+   "writable": []
+  },
+  "logMessages": [
+   "Program Vote111111111111111111111111111111111111111 invoke [1]",
+   "Program Vote111111111111111111111111111111111111111 success"
+  ],
+  "postBalances": [
+   27114097823,
+   1000000000,
+   1
+  ],
+  "postTokenBalances": [],
+  "preBalances": [
+   27114102823,
+   1000000000,
+   1
+  ],
+  "preTokenBalances": [],
+  "rewards": [],
+  "status": {
+   "Ok": null
+  }
+ },
+ "slot": 425000000,
+ "transaction": [
+  "AW3yq+sxI4mdR623oyU9FYqZJeMLZbl9iUXNE+7dHhIOgyt6G3YWjZuCT/U4UF5YxuZZjZ7nMzHWvZVREivAUQUBAAEDixRv7AKKXpuD5ryKo3c1aa5sdj0iaV4RwOzpGwPs+cBZWeRM9zBqrYu7yZV0gFU1MXyio3J7g0jpyULseFWCBQdhSB01dHS7fE12JOvTvbPYNV5z0RBD/A2jU4AAAAAADeyvid62QZzcuIybKMN6Era94Vc056uwc8cu29ieBJEBAgIBAJQBDgAAACD8VBkAAAAAHwEfAR4BHQEcARsBGgEZARgBFwEWARUBFAETARIBEQEQAQ8BDgENAQwBCwEKAQkBCAEHAQYBBQEEAQMBAgEB8XOwwzhPr7TDgoeLvmYlNcgTD0pYI4bhbdNbkcTwjlYBHQkmagAAAAC/NvEX29YhNCMvKy7VcCx1o4dl5e+NtW5pEBMMcNy+2A==",
+  "base64"
+ ],
+ "transactionIndex": 1,
+ "version": "legacy"
+}

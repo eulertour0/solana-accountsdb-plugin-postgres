@@ -2888,6 +2888,7 @@ name = "solana-geyser-plugin-postgres"
 version = "4.3.0"
 dependencies = [
  "agave-geyser-plugin-interface",
+ "base64",
  "bs58",
  "chrono",
  "crossbeam-channel",
@@ -2906,6 +2907,7 @@ dependencies = [
  "solana-reward-info",
  "solana-signature",
  "solana-transaction",
+ "solana-transaction-context",
  "solana-transaction-error",
  "solana-transaction-status",
  "thiserror 2.0.19",

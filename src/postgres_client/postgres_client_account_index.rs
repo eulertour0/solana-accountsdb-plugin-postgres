@@ -76,9 +76,9 @@ impl SimplePostgresClient {
             let val_str = format!("(${}, ${}, ${})", row + 1, row + 2, row + 3);
 
             if j == 0 {
-                stmt = format!("{} {}", &stmt, val_str);
+                stmt = format!("{} {}", stmt, val_str);
             } else {
-                stmt = format!("{}, {}", &stmt, val_str);
+                stmt = format!("{}, {}", stmt, val_str);
             }
         }
 

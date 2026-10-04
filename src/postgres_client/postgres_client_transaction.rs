@@ -146,6 +146,7 @@ pub struct DbLoadedMessageV0 {
     pub loaded_addresses: DbLoadedAddresses,
 }
 
+#[derive(Clone, Debug)]
 pub struct DbTransaction {
     pub signature: Vec<u8>,
     pub is_vote: bool,
@@ -475,8 +476,8 @@ impl From<&TransactionError> for DbTransactionErrorCode {
 #[derive(Clone, Debug, Eq, FromSql, ToSql, PartialEq)]
 #[postgres(name = "TransactionError")]
 pub struct DbTransactionError {
-    error_code: DbTransactionErrorCode,
-    error_detail: Option<String>,
+    pub error_code: DbTransactionErrorCode,
+    pub error_detail: Option<String>,
 }
 
 fn get_transaction_error(result: &Result<(), TransactionError>) -> Option<DbTransactionError> {
@@ -554,7 +555,7 @@ impl From<&TransactionStatusMeta> for DbTransactionStatusMeta {
     }
 }
 
-pub(crate) fn build_db_transaction(
+pub fn build_db_transaction(
     slot: u64,
     transaction_info: &TransactionNotification,
     transaction_write_version: u64,
@@ -598,6 +599,22 @@ pub(crate) fn build_db_transaction(
         write_version: transaction_write_version as i64,
         index: transaction_info.index as i64,
     }
+}
+
+/// `build_db_transaction` plus the `store_log_messages` option: when it is false
+/// `(meta).log_messages` is written as NULL. Shared by the plugin and the
+/// `pg_backfill` tool so that both store identical rows.
+pub fn build_db_transaction_for_store(
+    slot: u64,
+    transaction_info: &TransactionNotification,
+    transaction_write_version: u64,
+    store_log_messages: bool,
+) -> DbTransaction {
+    let mut transaction = build_db_transaction(slot, transaction_info, transaction_write_version);
+    if !store_log_messages {
+        transaction.meta.log_messages = None;
+    }
+    transaction
 }
 
 impl SimplePostgresClient {
@@ -687,10 +704,12 @@ impl ParallelPostgresClient {
             .transaction_write_version
             .fetch_add(1, Ordering::Relaxed)
             .wrapping_add(1);
-        let mut transaction_info = build_db_transaction(slot, transaction_info, write_version);
-        if !self.store_log_messages {
-            transaction_info.meta.log_messages = None;
-        }
+        let transaction_info = build_db_transaction_for_store(
+            slot,
+            transaction_info,
+            write_version,
+            self.store_log_messages,
+        );
         if log::log_enabled!(log::Level::Trace) {
             trace!(
                 "queue transaction signature={} slot={} index={} message_type={} \

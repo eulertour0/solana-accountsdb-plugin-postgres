@@ -137,7 +137,7 @@ pub(crate) fn db_write_error(context: &str, err: postgres::Error) -> GeyserPlugi
     }
 }
 
-fn is_row_data_error(err: &GeyserPluginError) -> bool {
+pub fn is_row_data_error(err: &GeyserPluginError) -> bool {
     match err {
         GeyserPluginError::Custom(err) => matches!(
             err.downcast_ref::<GeyserPluginPostgresError>(),
@@ -439,9 +439,9 @@ impl SimplePostgresClient {
             );
 
             if j == 0 {
-                stmt = format!("{} {}", &stmt, val_str);
+                stmt = format!("{} {}", stmt, val_str);
             } else {
-                stmt = format!("{}, {}", &stmt, val_str);
+                stmt = format!("{}, {}", stmt, val_str);
             }
         }
 
@@ -1340,7 +1340,7 @@ fn longest_slot_status() -> usize {
 }
 
 /// Returns the schema problems that would make every write of some kind fail.
-fn check_schema(client: &mut Client) -> Result<Vec<String>, postgres::Error> {
+pub fn check_schema(client: &mut Client) -> Result<Vec<String>, postgres::Error> {
     let mut problems = Vec::new();
     for (type_name, labels) in REQUIRED_ENUM_LABELS {
         let rows = client.query(

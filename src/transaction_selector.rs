@@ -2,7 +2,7 @@
 /// in the plugin framework.
 use {log::*, solana_pubkey::Pubkey, std::collections::HashSet};
 
-pub(crate) struct TransactionSelector {
+pub struct TransactionSelector {
     pub mentioned_addresses: HashSet<Vec<u8>>,
     pub select_all_transactions: bool,
     pub select_all_vote_transactions: bool,
@@ -10,6 +10,8 @@ pub(crate) struct TransactionSelector {
 
 #[allow(dead_code)]
 impl TransactionSelector {
+    // Kept as an inherent constructor (the selector is public for pg_backfill).
+    #[allow(clippy::should_implement_trait)]
     pub fn default() -> Self {
         Self {
             mentioned_addresses: HashSet::default(),
