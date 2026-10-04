@@ -1,0 +1,40 @@
+{
+ "blockTime": 1791035521,
+ "meta": {
+  "computeUnitsConsumed": 329,
+  "costUnits": 1363,
+  "err": null,
+  "fee": 5300,
+  "innerInstructions": [],
+  "loadedAddresses": {
+   "readonly": [],
+   "writable": []
+  },
+  "logMessages": [
+   "Program Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo invoke [1]",
+   "Program Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo consumed 329 of 1000 compute units",
+   "Program Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo success"
+  ],
+  "postBalances": [
+   834980251,
+   121159709
+  ],
+  "postTokenBalances": [],
+  "preBalances": [
+   834985551,
+   121159709
+  ],
+  "preTokenBalances": [],
+  "rewards": [],
+  "status": {
+   "Ok": null
+  }
+ },
+ "slot": 452952288,
+ "transaction": [
+  "gQEAAQ8AAAA7++Wx/ygdQyGng91NXIP9tW4EA5b1UJK+GwIGi5199QECPI1HVKZoBcsA3sv4AomoGkc1JEVQSvk1gCpQ1JCwveEFSlNQ+F3IgtYUpVZyeIopbd8eq6vQpgZ4iEky9O72oCwBAAAAAAAA6AMAAAAAAQABABgAcHJvYmU6NVZuWnlaYmpZTEFWSG5kczowUVD/ksUyxgJ8cGFHME7SeTH1hxM2yKhvNazqMRJlJRDWQ9fq0/f+y9IgEKKUWmzOOK6K1zcxIyv2Oci02yNbAg==",
+  "base64"
+ ],
+ "transactionIndex": 741,
+ "version": 1
+}

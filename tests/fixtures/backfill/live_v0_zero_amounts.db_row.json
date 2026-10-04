@@ -1,0 +1,222 @@
+{
+ "signature": "\\xf9741c56f7759ab2b927bd4aca8d1d741933c261a43c2e448612bebbcbb9f1ecd95725e478aaf763ccad86f4f9c26e3193f0067a5c07957677d09bb279d08e02",
+ "slot": 422081303,
+ "message_type": 1,
+ "index": 528,
+ "meta": {
+  "error": {
+   "error_code": "InstructionError",
+   "error_detail": "InstructionError: idx (2), error: (custom program error: 0x101)"
+  },
+  "fee": 395325,
+  "pre_balances": [
+   19885127558,
+   2865832133525,
+   2039280,
+   0,
+   1,
+   2491440,
+   9400580,
+   1141442,
+   50333570,
+   5324400,
+   369469219806,
+   2039280,
+   29252880,
+   70407360,
+   70407360,
+   2039280,
+   5435760,
+   0,
+   785469727,
+   1514552816438,
+   1461601,
+   2584522,
+   1274547522247
+  ],
+  "post_balances": [
+   19884732233,
+   2865832133525,
+   2039280,
+   0,
+   1,
+   2491440,
+   9400580,
+   1141442,
+   50333570,
+   5324400,
+   369469219806,
+   2039280,
+   29252880,
+   70407360,
+   70407360,
+   2039280,
+   5435760,
+   0,
+   785469727,
+   1514552816438,
+   1461601,
+   2584522,
+   1274547522247
+  ],
+  "inner_instructions": [
+   {
+    "index": 2,
+    "instructions": [
+     {
+      "program_id_index": 8,
+      "accounts": [
+       0,
+       22,
+       21,
+       9,
+       1,
+       2,
+       10,
+       11,
+       5,
+       5,
+       19,
+       20,
+       12
+      ],
+      "data": "\\x8fbe5adac41e33de001c4e0e000000000000000000000000"
+     },
+     {
+      "program_id_index": 5,
+      "accounts": [
+       1,
+       19,
+       10,
+       0
+      ],
+      "data": "\\x0c001c4e0e0000000009"
+     },
+     {
+      "program_id_index": 5,
+      "accounts": [
+       11,
+       20,
+       2,
+       22
+      ],
+      "data": "\\x0c357dd4ba0d00000006"
+     },
+     {
+      "program_id_index": 6,
+      "accounts": [
+       5,
+       0,
+       16,
+       1,
+       18,
+       2,
+       15,
+       14,
+       13,
+       13,
+       17
+      ],
+      "data": "\\xf8c69e91e17587c8357dd4ba0d0000000000000000000000c06e78c04b5cec5959000000000000000100"
+     },
+     {
+      "program_id_index": 5,
+      "accounts": [
+       2,
+       15,
+       0
+      ],
+      "data": "\\x03357dd4ba0d000000"
+     },
+     {
+      "program_id_index": 5,
+      "accounts": [
+       18,
+       1,
+       16
+      ],
+      "data": "\\x03f43b890d00000000"
+     }
+    ]
+   }
+  ],
+  "log_messages": null,
+  "pre_token_balances": [
+   {
+    "account_index": 1,
+    "mint": "So11111111111111111111111111111111111111112",
+    "ui_token_amount": 2865.830090213,
+    "owner": "55NQkFDwwW8noThkL9Rd5ngbgUU36fYZeos1k5ZwjGdn"
+   },
+   {
+    "account_index": 2,
+    "mint": "hqYtLoxviwGENvogcJ5324YTbYqW5H9LHtmQu5Jbonk",
+    "ui_token_amount": 0,
+    "owner": "55NQkFDwwW8noThkL9Rd5ngbgUU36fYZeos1k5ZwjGdn"
+   },
+   {
+    "account_index": 10,
+    "mint": "So11111111111111111111111111111111111111112",
+    "ui_token_amount": 369.467180526,
+    "owner": "GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL"
+   },
+   {
+    "account_index": 11,
+    "mint": "hqYtLoxviwGENvogcJ5324YTbYqW5H9LHtmQu5Jbonk",
+    "ui_token_amount": 91069367.563476,
+    "owner": "GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL"
+   },
+   {
+    "account_index": 15,
+    "mint": "hqYtLoxviwGENvogcJ5324YTbYqW5H9LHtmQu5Jbonk",
+    "ui_token_amount": 743038.133583,
+    "owner": "8MPjTWaSwVhfMJ5qjSGtQuvXujjGXeWNtu6YnS9uqgvs"
+   },
+   {
+    "account_index": 18,
+    "mint": "So11111111111111111111111111111111111111112",
+    "ui_token_amount": 0.783430447,
+    "owner": "8MPjTWaSwVhfMJ5qjSGtQuvXujjGXeWNtu6YnS9uqgvs"
+   }
+  ],
+  "post_token_balances": [
+   {
+    "account_index": 1,
+    "mint": "So11111111111111111111111111111111111111112",
+    "ui_token_amount": 2865.830090213,
+    "owner": "55NQkFDwwW8noThkL9Rd5ngbgUU36fYZeos1k5ZwjGdn"
+   },
+   {
+    "account_index": 2,
+    "mint": "hqYtLoxviwGENvogcJ5324YTbYqW5H9LHtmQu5Jbonk",
+    "ui_token_amount": 0,
+    "owner": "55NQkFDwwW8noThkL9Rd5ngbgUU36fYZeos1k5ZwjGdn"
+   },
+   {
+    "account_index": 10,
+    "mint": "So11111111111111111111111111111111111111112",
+    "ui_token_amount": 369.467180526,
+    "owner": "GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL"
+   },
+   {
+    "account_index": 11,
+    "mint": "hqYtLoxviwGENvogcJ5324YTbYqW5H9LHtmQu5Jbonk",
+    "ui_token_amount": 91069367.563476,
+    "owner": "GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL"
+   },
+   {
+    "account_index": 15,
+    "mint": "hqYtLoxviwGENvogcJ5324YTbYqW5H9LHtmQu5Jbonk",
+    "ui_token_amount": 743038.133583,
+    "owner": "8MPjTWaSwVhfMJ5qjSGtQuvXujjGXeWNtu6YnS9uqgvs"
+   },
+   {
+    "account_index": 18,
+    "mint": "So11111111111111111111111111111111111111112",
+    "ui_token_amount": 0.783430447,
+    "owner": "8MPjTWaSwVhfMJ5qjSGtQuvXujjGXeWNtu6YnS9uqgvs"
+   }
+  ],
+  "rewards": []
+ }
+}

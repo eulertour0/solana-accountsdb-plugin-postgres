@@ -45,6 +45,18 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.19"
 
+# Only for the pg_backfill tool (feature "backfill"); the plugin library does not
+# use it. reqwest is already in the graph through agave's solana-metrics.
+reqwest = { version = "=0.12.28", optional = true, default-features = false, features = ["blocking", "json", "rustls-tls"] }
+
+[features]
+backfill = ["dep:reqwest"]
+
+[[bin]]
+name = "pg_backfill"
+path = "src/bin/pg_backfill.rs"
+required-features = ["backfill"]
+
 [dev-dependencies]
 solana-instruction-error = "=2.5.0"
 

@@ -1,0 +1,49 @@
+{
+ "signature": "\\x5150ff92c532c6027c706147304ed27931f5871336c8a86f35acea3112652510d643d7ead3f7fecbd22010a2945a6cce38ae8ad73731232bf639c8b4db235b02",
+ "is_vote": false,
+ "slot": 452952288,
+ "message_type": 2,
+ "legacy_message": {
+  "header": {
+   "num_required_signatures": 1,
+   "num_readonly_signed_accounts": 0,
+   "num_readonly_unsigned_accounts": 1
+  },
+  "account_keys": [
+   "\\x3c8d4754a66805cb00decbf80289a81a47352445504af935802a50d490b0bde1",
+   "\\x054a5350f85dc882d614a55672788a296ddf1eababd0a60678884932f4eef6a0"
+  ],
+  "recent_blockhash": "\\x3bfbe5b1ff281d4321a783dd4d5c83fdb56e040396f55092be1b02068b9d7df5",
+  "instructions": [
+   {
+    "program_id_index": 1,
+    "accounts": [],
+    "data": "\\x70726f62653a35566e5a795a626a594c4156486e64733a30"
+   }
+  ]
+ },
+ "v0_loaded_message": null,
+ "signatures": [
+  "\\x5150ff92c532c6027c706147304ed27931f5871336c8a86f35acea3112652510d643d7ead3f7fecbd22010a2945a6cce38ae8ad73731232bf639c8b4db235b02"
+ ],
+ "message_hash": "\\x7da85e830dcbbcfe7de619afdedf553bf150418ff157301aa0a4f717b8e4c0b1",
+ "meta": {
+  "error": null,
+  "fee": 5300,
+  "pre_balances": [
+   834985551,
+   121159709
+  ],
+  "post_balances": [
+   834980251,
+   121159709
+  ],
+  "inner_instructions": [],
+  "log_messages": null,
+  "pre_token_balances": [],
+  "post_token_balances": [],
+  "rewards": []
+ },
+ "write_version": 1,
+ "index": 741
+}
