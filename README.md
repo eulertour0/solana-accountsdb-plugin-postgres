@@ -2,50 +2,74 @@ The `solana-geyser-plugin-postgres` crate implements a plugin storing
 account data to a PostgreSQL database to illustrate how a plugin can be
 developed to work with Solana validators using the [Plugin Framework](https://docs.solana.com/developing/plugins/geyser-plugins).
 
-### Building for agave v4.3.0
+### Building for agave v4.4.1
 
 A Geyser plugin is loaded with `dlopen` and shares Rust trait objects and
-`repr(Rust)` types (`VersionedTransaction`, `TransactionStatusMeta`,
-`log::Record`, ...) with the validator. It is only safe to load when it is built
-with the same rustc and from the same agave source as the validator. A plugin
-built for agave 4.2 crashes a 4.3 validator at startup.
+`repr(Rust)` types (`VersionedTransaction`, `LoadedAddresses`,
+`TransactionError`, `log::Record`, ...) with the validator. It is only safe to
+load when it is built with the same rustc and from the same crate versions as
+the validator. A plugin built for agave 4.2 crashes a 4.3 validator at startup,
+and a 4.3 plugin cannot be loaded by a 4.4 validator either (the transaction
+and block notification versions it handles no longer exist).
 
-This branch (`agave-v4.3`) targets **agave v4.3.0** (tag `v4.3.0`, commit
-`825efd18`):
+This branch (`agave-v4.4`) targets **agave v4.4.1** (tag `v4.4.1`, commit
+`5bb304027f`):
 
-* `agave-geyser-plugin-interface` and `solana-transaction-status` are path
-  dependencies on the agave source, expected as a sibling directory named
-  `agave-v4.3.0` next to this repository (`../agave-v4.3.0`). If the validator
-  source lives elsewhere, create a symlink at that path pointing to it (or edit
-  the two `path =` entries in `Cargo.toml`).
-* `rust-toolchain.toml` pins rustc **1.97.1** (agave v4.3.0's toolchain).
-* `Cargo.lock` was seeded from agave v4.3.0's `Cargo.lock`, and the registry
+* Since agave v4.4 the interface is the crates.io crate
+  `agave-geyser-plugin-interface` **5.0.0** (agave's workspace pins it with
+  `=`). It no longer exposes `solana-transaction-status` types: transactions
+  arrive as `ReplicaTransactionInfoVersions::V0_0_4` and blocks as
+  `ReplicaBlockInfoVersions::V0_0_5`, with the status meta and rewards as the
+  borrowed mirror types of its `transaction_status_meta` module. The plugin
+  maps those mirrors straight into its row types, so the plugin library has no
+  agave path dependency.
+* `pg_backfill` (feature `backfill`) still needs agave's
+  `solana-transaction-status` / `solana-transaction-context` for the RPC
+  types. They are path dependencies on the agave source, expected as a sibling
+  directory named `agave-v4.4.1` next to this repository (`../agave-v4.4.1`).
+  If the validator source lives elsewhere, create a symlink at that path
+  pointing to it (or edit the two `path =` entries in `Cargo.toml`). The default
+  (plugin) build does not read it, but `scripts/check_agave_abi_deps.sh` does.
+* `rust-toolchain.toml` pins rustc **1.98.1** (agave v4.4.1's toolchain).
+* `Cargo.lock` was seeded from agave v4.4.1's `Cargo.lock`, and the registry
   crates whose types cross the plugin boundary are pinned with `=` to the same
-  versions. `scripts/check_agave_abi_deps.sh` verifies that every crate shared
-  with `agave-validator` resolves to the validator's version.
+  versions (`solana-message` 5.0.0, `solana-transaction` 5.0.0,
+  `solana-transaction-error` 4.0.0, `solana-clock` 4.0.0, `log` 0.4.34, ...).
+  `scripts/check_agave_abi_deps.sh` verifies that every crate shared with
+  `agave-validator` resolves to the validator's version.
 
-Build steps on mainnet-la (validator built from the same v4.3.0 tree):
+Build steps on mainnet-la (validator built from the same v4.4.1 tree):
 
 ```
-rustup toolchain install 1.97.1            # if not installed yet
+rustup toolchain install 1.98.1            # if not installed yet
 cd ~                                       # parent of this repository
-git clone --branch v4.3.0 --depth 1 https://github.com/anza-xyz/agave.git agave-v4.3.0
-#   or: ln -s /path/to/the/validator/agave/source agave-v4.3.0
+git clone --branch v4.4.1 --depth 1 https://github.com/anza-xyz/agave.git agave-v4.4.1
+#   or: ln -s /path/to/the/validator/agave/source agave-v4.4.1
 cd solana-accountsdb-plugin-postgres
-git checkout agave-v4.3
+git checkout agave-v4.4
 scripts/check_agave_abi_deps.sh            # must print "OK: ..."
 cargo build --release --locked
 cargo run --release --locked --example validator_abi_smoke -- \
-    target/release/libsolana_geyser_plugin_postgres.so
+    $PWD/target/release/libsolana_geyser_plugin_postgres.so
 ```
 
 The ABI smoke tool `dlopen`s the built library, installs a logger through
-`setup_logger`, and drives every callback agave v4.3.0 uses
-(`update_account_from_snapshot`, `update_account_for_bank`,
-`notify_transaction_for_bank` with `ReplicaTransactionInfoV3`,
+`setup_logger`, and drives every callback agave v4.4.1 uses
+(`update_account_from_snapshot`, `update_account_for_bank` with
+`ReplicaAccountInfoV3`, `notify_transaction_for_bank` with
+`ReplicaTransactionInfoV4`, `notify_entry_for_bank`, `notify_block_footer`,
 `update_slot_status`, `update_bank_status`, `notify_block_metadata_for_bank`
-with `ReplicaBlockInfoV4`, `notify_end_of_startup`, `on_unload`) and checks the
-values the plugin decoded. It needs no PostgreSQL server.
+with `ReplicaBlockInfoV5`, `notify_end_of_startup`, `on_unload`) with every
+optional meta field populated. It compares the complete rows the loaded library
+queued (taken from its trace log) with the rows the crate builds in-process
+from the same values. It needs no PostgreSQL server and no validator build.
+
+Upgrading from the agave v4.3 build needs no database change: rows are written
+exactly as before (same columns, same values). `TransactionError` became
+`#[non_exhaustive]` and gained `BailOut` (a leader-side discard that is never
+committed, so it should not reach the plugin); it and any later variant are
+stored with the existing `Unknown` label and the error's `Debug` text in
+`error_detail`.
 
 ### Upgrading an existing database (agave v4.3 build)
 
@@ -114,8 +138,9 @@ Example configuration (transactions only, accounts disabled):
 with transaction history (`https://api.mainnet-beta.solana.com` by default).
 Rows are built by the plugin's own code: the `getTransaction` reply (base64) is
 converted back into the `VersionedTransaction` + `TransactionStatusMeta` the
-validator hands to the plugin (`src/rpc_convert.rs`, the inverse of agave's RPC
-encoder), filtered with the plugin's `TransactionSelector` (static and
+validator builds (`src/rpc_convert.rs`, the inverse of agave's RPC encoder),
+borrowed into the interface's mirror types the way agave's geyser plugin
+manager does before notifying a plugin (`with_mirror_meta`), filtered with the plugin's `TransactionSelector` (static and
 ALT-loaded keys), turned into a row by `build_db_transaction` and written with
 the plugin's prepared upserts (`ON CONFLICT (slot, signature) DO UPDATE`, slot
 rows as `rooted` through the `WHERE status <> 'rooted'` guard).
