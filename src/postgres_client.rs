@@ -1266,6 +1266,7 @@ impl ParallelPostgresClient {
             block_info.block_time,
             block_info.block_height
         );
+        trace!("queue block row {block_info:?}");
         if let Err(err) = self.sender.send(DbWorkItem::UpdateBlockMetadata(Box::new(
             UpdateBlockMetadataRequest { block_info },
         ))) {

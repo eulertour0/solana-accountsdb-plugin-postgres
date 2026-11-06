@@ -1,5 +1,5 @@
 [toolchain]
-# Must match the rustc that builds the validator (agave v4.3.0 rust-toolchain.toml).
+# Must match the rustc that builds the validator (agave v4.4.1 rust-toolchain.toml).
 # Trait-object vtables and repr(Rust) layouts crossing the plugin boundary are
 # only guaranteed identical when both sides use the same compiler.
-channel = "1.97.1"
+channel = "1.98.1"

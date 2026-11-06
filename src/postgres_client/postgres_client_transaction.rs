@@ -7,7 +7,12 @@ use {
             db_write_error, DbWorkItem, ParallelPostgresClient, SimplePostgresClient,
         },
     },
-    agave_geyser_plugin_interface::geyser_plugin_interface::GeyserPluginError,
+    agave_geyser_plugin_interface::{
+        geyser_plugin_interface::GeyserPluginError,
+        transaction_status_meta::{
+            InnerInstructions, Reward, TransactionStatusMeta, TransactionTokenBalance,
+        },
+    },
     chrono::Utc,
     log::*,
     postgres::{Client, Statement},
@@ -22,9 +27,6 @@ use {
     solana_signature::Signature,
     solana_transaction::versioned::VersionedTransaction,
     solana_transaction_error::TransactionError,
-    solana_transaction_status::{
-        InnerInstructions, Reward, TransactionStatusMeta, TransactionTokenBalance,
-    },
     std::sync::atomic::Ordering,
 };
 
@@ -168,14 +170,17 @@ pub struct LogTransactionRequest {
     pub transaction_info: DbTransaction,
 }
 
-/// Version independent view of a transaction notification
-/// (`ReplicaTransactionInfo`, `V2` and `V3`).
+/// A transaction notification as the plugin stores it: the fields of
+/// `ReplicaTransactionInfoV4`, with the meta in the interface's borrowed mirror
+/// types. `pg_backfill` borrows its owned meta into the same view
+/// (`rpc_convert::with_mirror_meta`), so live and backfilled rows are built by
+/// the same code.
 pub struct TransactionNotification<'a> {
     pub signature: &'a Signature,
     pub is_vote: bool,
     pub transaction: &'a VersionedTransaction,
     pub message_hash: &'a Hash,
-    pub meta: &'a TransactionStatusMeta,
+    pub meta: &'a TransactionStatusMeta<'a>,
     pub index: usize,
 }
 
@@ -315,14 +320,14 @@ impl DbLoadedMessageV0 {
     }
 }
 
-impl From<&InnerInstructions> for DbInnerInstructions {
+impl From<&InnerInstructions<'_>> for DbInnerInstructions {
     fn from(instructions: &InnerInstructions) -> Self {
         Self {
             index: instructions.index as i16,
             instructions: instructions
                 .instructions
                 .iter()
-                .map(|instruction| DbCompiledInstruction::from(&instruction.instruction))
+                .map(|instruction| DbCompiledInstruction::from(instruction.instruction))
                 .collect(),
         }
     }
@@ -341,10 +346,10 @@ impl From<&RewardType> for DbRewardType {
     }
 }
 
-impl From<&Reward> for DbReward {
+impl From<&Reward<'_>> for DbReward {
     fn from(reward: &Reward) -> Self {
         Self {
-            pubkey: reward.pubkey.clone(),
+            pubkey: reward.pubkey.to_string(),
             lamports: reward.lamports,
             post_balance: reward.post_balance as i64,
             reward_type: reward.reward_type.as_ref().map(DbRewardType::from),
@@ -403,15 +408,20 @@ pub enum DbTransactionErrorCode {
     // Added by scripts/migrate_agave_v4_3.sql
     ProgramCacheHitMaxLimit,
     CommitCancelled,
-    /// Reserved fallback label for errors the plugin cannot classify; the error
-    /// text then goes to `error_detail`. Not produced for any current variant.
+    /// Fallback label for errors without a label of their own; the error's
+    /// `Debug` text then goes to `error_detail`. Used for `BailOut` (agave v4.4,
+    /// a leader-side discard that is never committed, so it should not reach the
+    /// plugin) and for any variant a later `TransactionError` adds.
     Unknown,
 }
 
 impl From<&TransactionError> for DbTransactionErrorCode {
-    // The match is deliberately exhaustive (no wildcard): `TransactionError` is not
-    // `#[non_exhaustive]`, so a variant added by a future agave fails the build here
-    // instead of being silently mislabeled, and no runtime path can panic.
+    // `TransactionError` is `#[non_exhaustive]` since solana-transaction-error 4.0,
+    // so the match needs a wildcard. Every variant that has a label is listed;
+    // `BailOut` and future variants become `Unknown` with the error text in
+    // `error_detail` (see `get_transaction_error`) instead of failing the row.
+    // `test_all_transaction_errors_map_without_panic` walks
+    // `TransactionError::VARIANTS` so that a new variant is noticed on upgrade.
     fn from(err: &TransactionError) -> Self {
         match err {
             TransactionError::AccountInUse => Self::AccountInUse,
@@ -469,6 +479,8 @@ impl From<&TransactionError> for DbTransactionErrorCode {
             }
             TransactionError::ProgramCacheHitMaxLimit => Self::ProgramCacheHitMaxLimit,
             TransactionError::CommitCancelled => Self::CommitCancelled,
+            TransactionError::BailOut => Self::Unknown,
+            _ => Self::Unknown,
         }
     }
 }
@@ -480,8 +492,8 @@ pub struct DbTransactionError {
     pub error_detail: Option<String>,
 }
 
-fn get_transaction_error(result: &Result<(), TransactionError>) -> Option<DbTransactionError> {
-    let error = result.as_ref().err()?;
+fn get_transaction_error(result: &Result<(), &TransactionError>) -> Option<DbTransactionError> {
+    let error = *result.as_ref().err()?;
     let error_detail = match error {
         TransactionError::InstructionError(idx, instruction_error) => Some(format!(
             "InstructionError: idx ({idx}), error: ({instruction_error})"
@@ -495,24 +507,29 @@ fn get_transaction_error(result: &Result<(), TransactionError>) -> Option<DbTran
         }
         _ => None,
     };
+    let error_code = DbTransactionErrorCode::from(error);
+    let error_detail = match error_code {
+        DbTransactionErrorCode::Unknown => Some(format!("{error:?}")),
+        _ => error_detail,
+    };
     Some(DbTransactionError {
-        error_code: DbTransactionErrorCode::from(error),
+        error_code,
         error_detail: error_detail.map(|detail| bounded_text(detail, MAX_TRANSACTION_STATUS_LEN)),
     })
 }
 
-impl From<&TransactionTokenBalance> for DbTransactionTokenBalance {
+impl From<&TransactionTokenBalance<'_>> for DbTransactionTokenBalance {
     fn from(token_balance: &TransactionTokenBalance) -> Self {
         Self {
             account_index: token_balance.account_index as i16,
-            mint: token_balance.mint.clone(),
+            mint: token_balance.mint.to_string(),
             ui_token_amount: token_balance.ui_token_amount.ui_amount,
-            owner: token_balance.owner.clone(),
+            owner: token_balance.owner.to_string(),
         }
     }
 }
 
-impl From<&TransactionStatusMeta> for DbTransactionStatusMeta {
+impl From<&TransactionStatusMeta<'_>> for DbTransactionStatusMeta {
     fn from(meta: &TransactionStatusMeta) -> Self {
         Self {
             error: get_transaction_error(&meta.status),
@@ -529,19 +546,17 @@ impl From<&TransactionStatusMeta> for DbTransactionStatusMeta {
                 .collect(),
             inner_instructions: meta
                 .inner_instructions
-                .as_ref()
                 .map(|instructions| instructions.iter().map(DbInnerInstructions::from).collect()),
             log_messages: meta
                 .log_messages
-                .as_ref()
                 .map(|messages| messages.iter().map(|message| strip_nul(message)).collect()),
-            pre_token_balances: meta.pre_token_balances.as_ref().map(|balances| {
+            pre_token_balances: meta.pre_token_balances.map(|balances| {
                 balances
                     .iter()
                     .map(DbTransactionTokenBalance::from)
                     .collect()
             }),
-            post_token_balances: meta.post_token_balances.as_ref().map(|balances| {
+            post_token_balances: meta.post_token_balances.map(|balances| {
                 balances
                     .iter()
                     .map(DbTransactionTokenBalance::from)
@@ -549,7 +564,6 @@ impl From<&TransactionStatusMeta> for DbTransactionStatusMeta {
             }),
             rewards: meta
                 .rewards
-                .as_ref()
                 .map(|rewards| rewards.iter().map(DbReward::from).collect()),
         }
     }
@@ -572,7 +586,7 @@ pub fn build_db_transaction(
                 None,
                 Some(DbLoadedMessageV0::new(
                     message,
-                    &transaction_info.meta.loaded_addresses,
+                    transaction_info.meta.loaded_addresses,
                 )),
             ),
             VersionedMessage::V1(message) => (
@@ -740,6 +754,7 @@ impl ParallelPostgresClient {
                 transaction_info.meta.fee,
                 transaction_info.meta.error,
             );
+            trace!("queue transaction row {transaction_info:?}");
         }
         let wrk_item =
             DbWorkItem::LogTransaction(Box::new(LogTransactionRequest { transaction_info }));
@@ -756,8 +771,8 @@ impl ParallelPostgresClient {
 #[cfg(test)]
 pub(crate) mod tests {
     use {
-        super::*, solana_instruction_error::InstructionError, solana_pubkey::Pubkey,
-        solana_transaction_status::InnerInstruction,
+        super::*, agave_geyser_plugin_interface::transaction_status_meta::InnerInstruction,
+        solana_instruction_error::InstructionError, solana_pubkey::Pubkey,
     };
 
     const CREATE_SCHEMA: &str = include_str!("../../scripts/create_schema.sql");
@@ -781,7 +796,7 @@ pub(crate) mod tests {
     #[test]
     fn test_instruction_error_detail_head() {
         let error = TransactionError::InstructionError(3, InstructionError::Custom(6001));
-        let db_error = get_transaction_error(&Err(error)).unwrap();
+        let db_error = get_transaction_error(&Err(&error)).unwrap();
         assert_eq!(
             db_error.error_code,
             DbTransactionErrorCode::InstructionError
@@ -793,49 +808,22 @@ pub(crate) mod tests {
 
     #[test]
     fn test_all_transaction_errors_map_without_panic() {
-        let errors = [
-            TransactionError::AccountInUse,
-            TransactionError::AccountLoadedTwice,
-            TransactionError::AccountNotFound,
-            TransactionError::ProgramAccountNotFound,
-            TransactionError::InsufficientFundsForFee,
-            TransactionError::InvalidAccountForFee,
-            TransactionError::AlreadyProcessed,
-            TransactionError::BlockhashNotFound,
-            TransactionError::InstructionError(0, InstructionError::GenericError),
-            TransactionError::CallChainTooDeep,
-            TransactionError::MissingSignatureForFee,
-            TransactionError::InvalidAccountIndex,
-            TransactionError::SignatureFailure,
-            TransactionError::InvalidProgramForExecution,
-            TransactionError::SanitizeFailure,
-            TransactionError::ClusterMaintenance,
-            TransactionError::AccountBorrowOutstanding,
-            TransactionError::WouldExceedMaxBlockCostLimit,
-            TransactionError::UnsupportedVersion,
-            TransactionError::InvalidWritableAccount,
-            TransactionError::WouldExceedMaxAccountCostLimit,
-            TransactionError::WouldExceedAccountDataBlockLimit,
-            TransactionError::TooManyAccountLocks,
-            TransactionError::AddressLookupTableNotFound,
-            TransactionError::InvalidAddressLookupTableOwner,
-            TransactionError::InvalidAddressLookupTableData,
-            TransactionError::InvalidAddressLookupTableIndex,
-            TransactionError::InvalidRentPayingAccount,
-            TransactionError::WouldExceedMaxVoteCostLimit,
-            TransactionError::WouldExceedAccountDataTotalLimit,
-            TransactionError::DuplicateInstruction(1),
-            TransactionError::InsufficientFundsForRent { account_index: 2 },
-            TransactionError::MaxLoadedAccountsDataSizeExceeded,
-            TransactionError::InvalidLoadedAccountsDataSizeLimit,
-            TransactionError::ResanitizationNeeded,
-            TransactionError::ProgramExecutionTemporarilyRestricted { account_index: 3 },
-            TransactionError::UnbalancedTransaction,
-            TransactionError::ProgramCacheHitMaxLimit,
-            TransactionError::CommitCancelled,
-        ];
-        for error in errors {
-            let db_error = get_transaction_error(&Err(error.clone())).unwrap();
+        // Every variant of the solana-transaction-error the validator is built
+        // with. A variant added by an upgrade lands in `Unknown` until it gets a
+        // label (with a migration), and this list makes the upgrade notice it.
+        let unlabeled = ["BailOut"];
+        assert_eq!(TransactionError::VARIANTS.len(), 40);
+        for error in TransactionError::VARIANTS {
+            let name = format!("{error:?}");
+            let db_error = get_transaction_error(&Err(&error)).unwrap();
+            if unlabeled
+                .iter()
+                .any(|unlabeled| name.starts_with(unlabeled))
+            {
+                assert_eq!(db_error.error_code, DbTransactionErrorCode::Unknown);
+                assert_eq!(db_error.error_detail.as_deref(), Some(name.as_str()));
+                continue;
+            }
             assert_ne!(
                 db_error.error_code,
                 DbTransactionErrorCode::Unknown,
@@ -874,22 +862,26 @@ pub(crate) mod tests {
         }
     }
 
-    fn sample_meta(loaded_addresses: LoadedAddresses) -> TransactionStatusMeta {
+    fn sample_meta<'a>(
+        status: Result<(), &'a TransactionError>,
+        inner_instructions: &'a [InnerInstructions<'a>],
+        log_messages: &'a [&'a str],
+        loaded_addresses: &'a LoadedAddresses,
+    ) -> TransactionStatusMeta<'a> {
         TransactionStatusMeta {
-            status: Err(TransactionError::CommitCancelled),
+            status,
             fee: 5000,
-            pre_balances: vec![10, 20],
-            post_balances: vec![5, 20],
-            inner_instructions: Some(vec![InnerInstructions {
-                index: 0,
-                instructions: vec![InnerInstruction {
-                    instruction: CompiledInstruction::new_from_raw_parts(1, vec![7], vec![0]),
-                    stack_height: Some(2),
-                }],
-            }]),
-            log_messages: Some(vec!["Program log: a\0b".to_string()]),
+            pre_balances: &[10, 20],
+            post_balances: &[5, 20],
+            inner_instructions: Some(inner_instructions),
+            log_messages: Some(log_messages),
+            pre_token_balances: None,
+            post_token_balances: None,
+            rewards: None,
             loaded_addresses,
-            ..TransactionStatusMeta::default()
+            return_data: None,
+            compute_units_consumed: None,
+            cost_units: None,
         }
     }
 
@@ -923,10 +915,26 @@ pub(crate) mod tests {
             signatures: vec![Signature::from([6; 64])],
             message: VersionedMessage::V0(message),
         };
-        let meta = sample_meta(LoadedAddresses {
+        let loaded_addresses = LoadedAddresses {
             writable: vec![loaded_writable],
             readonly: vec![loaded_readonly],
-        });
+        };
+        let inner_instruction = CompiledInstruction::new_from_raw_parts(1, vec![7], vec![0]);
+        let inner = [InnerInstruction {
+            instruction: &inner_instruction,
+            stack_height: Some(2),
+        }];
+        let inner_instructions = [InnerInstructions {
+            index: 0,
+            instructions: &inner,
+        }];
+        let error = TransactionError::CommitCancelled;
+        let meta = sample_meta(
+            Err(&error),
+            &inner_instructions,
+            &["Program log: a\0b"],
+            &loaded_addresses,
+        );
         let message_hash = Hash::new_from_array([8; 32]);
         let notification = TransactionNotification {
             signature: &transaction.signatures[0],
@@ -981,8 +989,8 @@ pub(crate) mod tests {
             signatures: vec![Signature::from([6; 64])],
             message: VersionedMessage::Legacy(message),
         };
-        let mut meta = sample_meta(LoadedAddresses::default());
-        meta.status = Ok(());
+        let loaded_addresses = LoadedAddresses::default();
+        let meta = sample_meta(Ok(()), &[], &[], &loaded_addresses);
         let message_hash = Hash::default();
         let notification = TransactionNotification {
             signature: &transaction.signatures[0],

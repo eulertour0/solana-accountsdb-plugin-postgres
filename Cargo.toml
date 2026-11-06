@@ -3,35 +3,37 @@ authors = ["Solana Maintainers <maintainers@solana.foundation>"]
 edition = "2021"
 name = "solana-geyser-plugin-postgres"
 description = "The Solana AccountsDb plugin for PostgreSQL database."
-version = "4.3.0"
+version = "4.4.1"
 repository = "https://github.com/solana-labs/solana-accountsdb-plugin-postgres"
 license = "Apache-2.0"
 homepage = "https://solana.com/"
 documentation = "https://docs.rs/solana-validator"
-rust-version = "1.97.1"
+rust-version = "1.98.1"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-# The plugin is loaded into an agave v4.3.0 validator via dlopen and shares
+# The plugin is loaded into an agave v4.4.1 validator via dlopen and shares
 # trait objects and repr(Rust) types with it, so every crate whose types cross
 # the plugin boundary must be the exact source the validator is built from.
-# The agave source is expected as a sibling checkout at ../agave-v4.3.0
-# (tag v4.3.0, commit 825efd18); see README "Building for agave v4.3.0".
-# Registry crates below are pinned to the versions in agave v4.3.0's Cargo.lock.
+# Since agave v4.4 the interface is the crates.io crate
+# agave-geyser-plugin-interface 5.0.0 (agave's workspace pins it with `=`), and
+# it no longer carries solana-transaction-status types: transaction metas and
+# rewards arrive as the borrowed mirror types of its `transaction_status_meta`
+# module. The agave source is expected as a sibling checkout at ../agave-v4.4.1
+# (tag v4.4.1, commit 5bb304027f); see README "Building for agave v4.4.1".
+# Registry crates below are pinned to the versions in agave v4.4.1's Cargo.lock.
 [dependencies]
-agave-geyser-plugin-interface = { path = "../agave-v4.3.0/geyser-plugin-interface" }
-solana-transaction-status = { path = "../agave-v4.3.0/transaction-status", features = ["agave-unstable-api"] }
-solana-transaction-context = { path = "../agave-v4.3.0/transaction-context", features = ["agave-unstable-api"] }
-log = "=0.4.33"
-solana-clock = "=3.2.0"
+agave-geyser-plugin-interface = "=5.0.0"
+log = "=0.4.34"
+solana-clock = "=4.0.0"
 solana-hash = "=4.6.0"
-solana-message = "=4.5.0"
+solana-message = "=5.0.0"
 solana-pubkey = { version = "=4.3.0", default-features = false }
 solana-reward-info = "=7.0.0"
 solana-signature = { version = "=3.5.2", default-features = false }
-solana-transaction = "=4.2.0"
-solana-transaction-error = "=3.4.0"
+solana-transaction = "=5.0.0"
+solana-transaction-error = "=4.0.0"
 
 base64 = "0.22.1"
 bs58 = "0.5.1"
@@ -45,12 +47,15 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.19"
 
-# Only for the pg_backfill tool (feature "backfill"); the plugin library does not
-# use it. reqwest is already in the graph through agave's solana-metrics.
+# Only for the pg_backfill tool and its RPC conversion (feature "backfill"); the
+# plugin library loaded by the validator does not use them. reqwest is already
+# in the graph through agave's solana-metrics.
 reqwest = { version = "=0.12.28", optional = true, default-features = false, features = ["blocking", "json", "rustls-tls"] }
+solana-transaction-status = { path = "../agave-v4.4.1/transaction-status", optional = true, features = ["agave-unstable-api"] }
+solana-transaction-context = { path = "../agave-v4.4.1/transaction-context", optional = true, features = ["agave-unstable-api"] }
 
 [features]
-backfill = ["dep:reqwest"]
+backfill = ["dep:reqwest", "dep:solana-transaction-status", "dep:solana-transaction-context"]
 
 [[bin]]
 name = "pg_backfill"
@@ -58,7 +63,7 @@ path = "src/bin/pg_backfill.rs"
 required-features = ["backfill"]
 
 [dev-dependencies]
-solana-instruction-error = "=2.5.0"
+solana-instruction-error = "=3.0.0"
 
 [package.metadata.docs.rs]
 targets = ["x86_64-unknown-linux-gnu"]

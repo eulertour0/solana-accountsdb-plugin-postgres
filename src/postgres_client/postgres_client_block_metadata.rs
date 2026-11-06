@@ -7,12 +7,10 @@ use {
         },
     },
     agave_geyser_plugin_interface::geyser_plugin_interface::{
-        GeyserPluginError, ReplicaBlockInfo, ReplicaBlockInfoV2, ReplicaBlockInfoV3,
-        ReplicaBlockInfoV4, ReplicaBlockInfoVersions,
+        GeyserPluginError, ReplicaBlockInfoV5, ReplicaBlockInfoVersions,
     },
     chrono::Utc,
     postgres::{Client, Statement},
-    solana_transaction_status::Reward,
 };
 
 #[derive(Clone, Debug)]
@@ -24,61 +22,22 @@ pub struct DbBlockInfo {
     pub block_height: Option<i64>,
 }
 
-impl DbBlockInfo {
-    fn new(
-        slot: u64,
-        blockhash: &str,
-        rewards: &[Reward],
-        block_time: Option<i64>,
-        block_height: Option<u64>,
-    ) -> Self {
+impl From<&ReplicaBlockInfoV5<'_>> for DbBlockInfo {
+    fn from(b: &ReplicaBlockInfoV5) -> Self {
         Self {
-            slot: slot as i64,
-            blockhash: blockhash.to_string(),
-            rewards: rewards.iter().map(DbReward::from).collect(),
-            block_time,
-            block_height: block_height.map(|block_height| block_height as i64),
+            slot: b.slot as i64,
+            blockhash: b.blockhash.to_string(),
+            rewards: b.rewards.rewards.iter().map(DbReward::from).collect(),
+            block_time: b.block_time,
+            block_height: b.block_height.map(|block_height| block_height as i64),
         }
-    }
-}
-
-impl From<&ReplicaBlockInfo<'_>> for DbBlockInfo {
-    fn from(b: &ReplicaBlockInfo) -> Self {
-        Self::new(b.slot, b.blockhash, b.rewards, b.block_time, b.block_height)
-    }
-}
-
-impl From<&ReplicaBlockInfoV2<'_>> for DbBlockInfo {
-    fn from(b: &ReplicaBlockInfoV2) -> Self {
-        Self::new(b.slot, b.blockhash, b.rewards, b.block_time, b.block_height)
-    }
-}
-
-impl From<&ReplicaBlockInfoV3<'_>> for DbBlockInfo {
-    fn from(b: &ReplicaBlockInfoV3) -> Self {
-        Self::new(b.slot, b.blockhash, b.rewards, b.block_time, b.block_height)
-    }
-}
-
-impl From<&ReplicaBlockInfoV4<'_>> for DbBlockInfo {
-    fn from(b: &ReplicaBlockInfoV4) -> Self {
-        Self::new(
-            b.slot,
-            b.blockhash,
-            &b.rewards.rewards,
-            b.block_time,
-            b.block_height,
-        )
     }
 }
 
 impl From<&ReplicaBlockInfoVersions<'_>> for DbBlockInfo {
     fn from(block_info: &ReplicaBlockInfoVersions) -> Self {
         match block_info {
-            ReplicaBlockInfoVersions::V0_0_1(b) => Self::from(*b),
-            ReplicaBlockInfoVersions::V0_0_2(b) => Self::from(*b),
-            ReplicaBlockInfoVersions::V0_0_3(b) => Self::from(*b),
-            ReplicaBlockInfoVersions::V0_0_4(b) => Self::from(*b),
+            ReplicaBlockInfoVersions::V0_0_5(b) => Self::from(*b),
         }
     }
 }

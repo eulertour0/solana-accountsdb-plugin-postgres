@@ -1,7 +1,10 @@
 //! Conversion of a JSON-RPC `getTransaction` response (`"encoding": "base64"`)
 //! back into the native `VersionedTransaction` + `TransactionStatusMeta` that the
-//! validator hands to the plugin, so that `pg_backfill` can store rows for slots
-//! the plugin missed through the plugin's own `build_db_transaction`.
+//! validator builds, so that `pg_backfill` can store rows for slots the plugin
+//! missed through the plugin's own `build_db_transaction`. The owned meta is
+//! borrowed into the geyser interface's mirror types by `with_mirror_meta`, the
+//! same conversion agave's geyser plugin manager applies before notifying the
+//! plugin (agave v4.4 `transaction_notifier.rs`).
 //!
 //! agave's RPC produces the response with `VersionedTransactionWithStatusMeta::encode`
 //! (transaction-status) from the meta in the blockstore / long-term storage, which
@@ -19,6 +22,7 @@ use {
     crate::postgres_client::postgres_client_transaction::{
         build_db_transaction_for_store, DbTransaction, TransactionNotification,
     },
+    agave_geyser_plugin_interface::transaction_status_meta as mirror,
     base64::{prelude::BASE64_STANDARD, Engine},
     solana_hash::Hash,
     solana_message::{compiled_instruction::CompiledInstruction, v0::LoadedAddresses},
@@ -68,7 +72,7 @@ pub struct NativeTransaction {
     pub slot: u64,
     pub block_time: Option<i64>,
     /// Position of the transaction in the block (`transactionIndex`), the same
-    /// value the validator passes as `ReplicaTransactionInfoV3::index`.
+    /// value the validator passes as `ReplicaTransactionInfoV4::index`.
     pub index: Option<u32>,
     pub transaction: VersionedTransaction,
     pub meta: TransactionStatusMeta,
@@ -77,15 +81,19 @@ pub struct NativeTransaction {
 }
 
 impl NativeTransaction {
-    pub fn notification(&self) -> TransactionNotification<'_> {
-        TransactionNotification {
-            signature: &self.transaction.signatures[0],
-            is_vote: self.is_vote,
-            transaction: &self.transaction,
-            message_hash: &self.message_hash,
-            meta: &self.meta,
-            index: self.index.unwrap_or_default() as usize,
-        }
+    /// Calls `f` with the notification the validator would have sent for this
+    /// transaction.
+    pub fn with_notification<R>(&self, f: impl FnOnce(&TransactionNotification) -> R) -> R {
+        with_mirror_meta(&self.meta, |meta| {
+            f(&TransactionNotification {
+                signature: &self.transaction.signatures[0],
+                is_vote: self.is_vote,
+                transaction: &self.transaction,
+                message_hash: &self.message_hash,
+                meta,
+                index: self.index.unwrap_or_default() as usize,
+            })
+        })
     }
 
     /// Static keys plus the keys loaded from address lookup tables, the set the
@@ -104,17 +112,137 @@ impl NativeTransaction {
     /// that the order within a slot is kept.
     pub fn to_db_transaction(&self, store_log_messages: bool) -> DbTransaction {
         let index = self.index.map(u64::from);
-        let mut transaction = build_db_transaction_for_store(
-            self.slot,
-            &self.notification(),
-            index.unwrap_or_default(),
-            store_log_messages,
-        );
+        let mut transaction = self.with_notification(|notification| {
+            build_db_transaction_for_store(
+                self.slot,
+                notification,
+                index.unwrap_or_default(),
+                store_log_messages,
+            )
+        });
         if index.is_none() {
             transaction.index = UNKNOWN_TRANSACTION_INDEX;
         }
         transaction
     }
+}
+
+/// Borrows an owned `TransactionStatusMeta` as the interface's mirror type and
+/// calls `f` with it. Field for field the conversion agave v4.4's geyser plugin
+/// manager performs (`TransactionNotifierImpl::notify_transaction`); destructured
+/// exhaustively so that a field added to the owned type fails the build here.
+pub fn with_mirror_meta<R>(
+    meta: &TransactionStatusMeta,
+    f: impl FnOnce(&mirror::TransactionStatusMeta) -> R,
+) -> R {
+    let TransactionStatusMeta {
+        status,
+        fee,
+        pre_balances,
+        post_balances,
+        inner_instructions,
+        log_messages,
+        pre_token_balances,
+        post_token_balances,
+        rewards,
+        loaded_addresses,
+        return_data,
+        compute_units_consumed,
+        cost_units,
+    } = meta;
+
+    let inner_instructions_rows: Option<Vec<Vec<mirror::InnerInstruction>>> =
+        inner_instructions.as_ref().map(|groups| {
+            groups
+                .iter()
+                .map(|group| {
+                    group
+                        .instructions
+                        .iter()
+                        .map(|inner| mirror::InnerInstruction {
+                            instruction: &inner.instruction,
+                            stack_height: inner.stack_height,
+                        })
+                        .collect()
+                })
+                .collect()
+        });
+    let inner_instructions: Option<Vec<mirror::InnerInstructions>> = inner_instructions
+        .as_ref()
+        .zip(inner_instructions_rows.as_ref())
+        .map(|(groups, rows)| {
+            groups
+                .iter()
+                .zip(rows)
+                .map(|(group, row)| mirror::InnerInstructions {
+                    index: group.index,
+                    instructions: row,
+                })
+                .collect()
+        });
+    let log_messages: Option<Vec<&str>> = log_messages
+        .as_ref()
+        .map(|logs| logs.iter().map(String::as_str).collect());
+    fn token_balances(
+        balances: &Option<Vec<TransactionTokenBalance>>,
+    ) -> Option<Vec<mirror::TransactionTokenBalance<'_>>> {
+        balances.as_ref().map(|balances| {
+            balances
+                .iter()
+                .map(|balance| mirror::TransactionTokenBalance {
+                    account_index: balance.account_index,
+                    mint: &balance.mint,
+                    ui_token_amount: mirror::UiTokenAmount {
+                        ui_amount: balance.ui_token_amount.ui_amount,
+                        decimals: balance.ui_token_amount.decimals,
+                        amount: &balance.ui_token_amount.amount,
+                        ui_amount_string: &balance.ui_token_amount.ui_amount_string,
+                    },
+                    owner: &balance.owner,
+                    program_id: &balance.program_id,
+                })
+                .collect()
+        })
+    }
+    let pre_token_balances = token_balances(pre_token_balances);
+    let post_token_balances = token_balances(post_token_balances);
+    let rewards: Option<Vec<mirror::Reward>> = rewards.as_ref().map(|rewards| {
+        rewards
+            .iter()
+            .map(|reward| mirror::Reward {
+                pubkey: &reward.pubkey,
+                lamports: reward.lamports,
+                post_balance: reward.post_balance,
+                reward_type: reward.reward_type,
+                commission: reward.commission,
+                commission_bps: reward.commission_bps,
+            })
+            .collect()
+    });
+
+    f(&mirror::TransactionStatusMeta {
+        status: match status {
+            Ok(()) => Ok(()),
+            Err(err) => Err(err),
+        },
+        fee: *fee,
+        pre_balances,
+        post_balances,
+        inner_instructions: inner_instructions.as_deref(),
+        log_messages: log_messages.as_deref(),
+        pre_token_balances: pre_token_balances.as_deref(),
+        post_token_balances: post_token_balances.as_deref(),
+        rewards: rewards.as_deref(),
+        loaded_addresses,
+        return_data: return_data
+            .as_ref()
+            .map(|data| mirror::TransactionReturnData {
+                program_id: data.program_id,
+                data: &data.data,
+            }),
+        compute_units_consumed: *compute_units_consumed,
+        cost_units: *cost_units,
+    })
 }
 
 /// Same rule as the validator (`is_simple_vote_transaction`): 1 or 2 signatures,
@@ -462,18 +590,20 @@ mod tests {
             let index = json["transactionIndex"].as_u64().unwrap();
 
             let with_logs = native.to_db_transaction(true);
-            let reference = build_db_transaction(
-                native.slot,
-                &TransactionNotification {
-                    signature: &native.transaction.signatures[0],
-                    is_vote: false,
-                    transaction: &native.transaction,
-                    message_hash: &native.transaction.message.hash(),
-                    meta: &native.meta,
-                    index: index as usize,
-                },
-                index,
-            );
+            let reference = with_mirror_meta(&native.meta, |meta| {
+                build_db_transaction(
+                    native.slot,
+                    &TransactionNotification {
+                        signature: &native.transaction.signatures[0],
+                        is_vote: false,
+                        transaction: &native.transaction,
+                        message_hash: &native.transaction.message.hash(),
+                        meta,
+                        index: index as usize,
+                    },
+                    index,
+                )
+            });
             assert_eq!(format!("{with_logs:?}"), format!("{reference:?}"));
 
             let db = native.to_db_transaction(false);

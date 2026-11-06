@@ -309,33 +309,9 @@ impl GeyserPlugin for GeyserPluginPostgres {
             return Ok(());
         };
 
-        // V0_0_3 is what agave v4.3 sends. The sanitized-transaction versions are
-        // converted so that an older sender still works.
-        let versioned;
+        // V0_0_4 is the only version agave v4.4 (interface 5.0.0) sends.
         let notification = match transaction_info {
-            ReplicaTransactionInfoVersions::V0_0_1(info) => {
-                versioned = info.transaction.to_versioned_transaction();
-                TransactionNotification {
-                    signature: info.signature,
-                    is_vote: info.is_vote,
-                    transaction: &versioned,
-                    message_hash: info.transaction.message_hash(),
-                    meta: info.transaction_status_meta,
-                    index: 0,
-                }
-            }
-            ReplicaTransactionInfoVersions::V0_0_2(info) => {
-                versioned = info.transaction.to_versioned_transaction();
-                TransactionNotification {
-                    signature: info.signature,
-                    is_vote: info.is_vote,
-                    transaction: &versioned,
-                    message_hash: info.transaction.message_hash(),
-                    meta: info.transaction_status_meta,
-                    index: info.index,
-                }
-            }
-            ReplicaTransactionInfoVersions::V0_0_3(info) => TransactionNotification {
+            ReplicaTransactionInfoVersions::V0_0_4(info) => TransactionNotification {
                 signature: info.signature,
                 is_vote: info.is_vote,
                 transaction: info.transaction,
@@ -346,7 +322,7 @@ impl GeyserPlugin for GeyserPluginPostgres {
         };
 
         // Static keys plus the keys loaded from address lookup tables.
-        let loaded_addresses = &notification.meta.loaded_addresses;
+        let loaded_addresses = notification.meta.loaded_addresses;
         let mentioned_addresses = notification
             .transaction
             .message
